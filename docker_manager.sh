@@ -8,6 +8,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Global variables for SSH
+SSH_USERNAME=""
+SSH_PASSWORD=""
+SSH_HOSTNAME=""
+SSH_PORT="22"
+
 # Detect OS
 detect_os() {
     OS_TYPE=$(uname -s)
@@ -42,6 +48,35 @@ print_error() {
 
 print_warning() {
     printf "${YELLOW}[WARNING]${NC} %s\n" "$1"
+}
+
+# Function to check sshpass availability
+check_sshpass() {
+    if ! command -v sshpass >/dev/null 2>&1; then
+        print_warning "sshpass is not installed"
+        print_info "sshpass is required for password-based SSH authentication"
+        printf "\n"
+        printf "Installation instructions:\n"
+        case "$OS" in
+            macos)
+                printf "  macOS: ${GREEN}brew install sshpass${NC}\n"
+                ;;
+            linux)
+                printf "  Ubuntu/Debian: ${GREEN}sudo apt-get install sshpass${NC}\n"
+                printf "  RHEL/CentOS:   ${GREEN}sudo yum install sshpass${NC}\n"
+                printf "  Fedora:        ${GREEN}sudo dnf install sshpass${NC}\n"
+                printf "  Arch:          ${GREEN}sudo pacman -S sshpass${NC}\n"
+                ;;
+            *)
+                printf "  Please install sshpass for your system\n"
+                ;;
+        esac
+        printf "\n"
+        printf "Note: You can still use SSH key-based authentication without sshpass\n"
+        printf "\n"
+        return 1
+    fi
+    return 0
 }
 
 # Function to check if colima is running and start if not
@@ -623,6 +658,258 @@ interactive_shell() {
     return 0
 }
 
+# Function to execute remote command via SSH
+execute_remote_command() {
+    local username="$1"
+    local password="$2"
+    local hostname="$3"
+    local port="$4"
+    local command="$5"
+    
+    if [ -n "$password" ] && command -v sshpass >/dev/null 2>&1; then
+        sshpass -p "$password" ssh -p "$port" -o StrictHostKeyChecking=no "$username@$hostname" "$command"
+    else
+        ssh -p "$port" "$username@$hostname" "$command"
+    fi
+}
+
+# Function to manage remote Docker
+remote_docker_manager() {
+    local username="$1"
+    local password="$2"
+    local hostname="$3"
+    local port="${4:-22}"
+    
+    print_info "Remote Docker Management"
+    printf "\n"
+    
+    # Check if ssh is available
+    if ! command -v ssh >/dev/null 2>&1; then
+        print_error "SSH command not found. Please install OpenSSH client."
+        return 1
+    fi
+    
+    # If parameters not provided, ask interactively
+    if [ -z "$hostname" ]; then
+        printf "Enter hostname or IP address: "
+        read -r hostname
+        if [ -z "$hostname" ]; then
+            print_error "Hostname cannot be empty"
+            return 1
+        fi
+    fi
+    
+    if [ -z "$username" ]; then
+        printf "Enter username: "
+        read -r username
+        if [ -z "$username" ]; then
+            print_error "Username cannot be empty"
+            return 1
+        fi
+    fi
+    
+    if [ -z "$port" ] || [ "$port" = "22" ]; then
+        printf "Enter port (default: 22): "
+        read -r port_input
+        if [ -n "$port_input" ]; then
+            port="$port_input"
+        else
+            port="22"
+        fi
+    fi
+    
+    # Ask for password if not provided and sshpass is available
+    if [ -z "$password" ]; then
+        if command -v sshpass >/dev/null 2>&1; then
+            printf "Enter password (leave empty to use SSH keys): "
+            read -rs password
+            printf "\n"
+        else
+            print_info "Note: SSH key authentication will be used (sshpass not installed)"
+        fi
+    fi
+    
+    # Check if password provided but sshpass not available
+    if [ -n "$password" ] && ! command -v sshpass >/dev/null 2>&1; then
+        print_error "Password provided but sshpass is not installed"
+        print_info "Please install sshpass to use password authentication, or use SSH keys"
+        printf "\n"
+        check_sshpass
+        return 1
+    fi
+    
+    # Test connection first
+    print_info "Testing connection to: $username@$hostname:$port"
+    if ! execute_remote_command "$username" "$password" "$hostname" "$port" "echo 'Connection successful'"; then
+        print_error "Failed to connect to remote host"
+        return 1
+    fi
+    print_success "Connected successfully"
+    printf "\n"
+    
+    # Remote Docker management menu
+    while true; do
+        printf "\n"
+        printf "========================================\n"
+        printf "   Remote Docker Management\n"
+        printf "   Host: %s@%s:%s\n" "$username" "$hostname" "$port"
+        printf "========================================\n"
+        printf "  1) List Remote Docker Images\n"
+        printf "  2) List Remote Docker Processes\n"
+        printf "  3) Remove Remote Docker Image\n"
+        printf "  4) Remove Remote Docker Container\n"
+        printf "  5) Remove All Stopped Containers\n"
+        printf "  6) Docker System Prune (Clean Up)\n"
+        printf "  7) Execute Custom Docker Command\n"
+        printf "  0) Back to main menu\n"
+        printf "========================================\n"
+        printf "Enter your choice: "
+        read -r remote_choice
+        
+        case "$remote_choice" in
+            1)
+                print_info "Listing remote Docker images..."
+                printf "\n"
+                execute_remote_command "$username" "$password" "$hostname" "$port" "docker images"
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            2)
+                print_info "Listing remote Docker processes..."
+                printf "\n"
+                execute_remote_command "$username" "$password" "$hostname" "$port" "docker ps -a"
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            3)
+                print_info "Remote Docker images:"
+                printf "\n"
+                execute_remote_command "$username" "$password" "$hostname" "$port" "docker images"
+                printf "\n"
+                printf "Enter IMAGE ID or REPOSITORY:TAG to remove: "
+                read -r image_ref
+                if [ -z "$image_ref" ]; then
+                    print_error "Image reference cannot be empty"
+                else
+                    print_warning "About to remove image: $image_ref from remote host"
+                    printf "Are you sure? (y/n): "
+                    read -r confirm
+                    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                        execute_remote_command "$username" "$password" "$hostname" "$port" "docker rmi $image_ref"
+                        print_success "Command executed"
+                    else
+                        print_info "Operation cancelled"
+                    fi
+                fi
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            4)
+                print_info "Remote Docker containers:"
+                printf "\n"
+                execute_remote_command "$username" "$password" "$hostname" "$port" "docker ps -a"
+                printf "\n"
+                printf "Enter CONTAINER ID or NAME to remove: "
+                read -r container_ref
+                if [ -z "$container_ref" ]; then
+                    print_error "Container reference cannot be empty"
+                else
+                    print_warning "About to remove container: $container_ref from remote host"
+                    printf "Are you sure? (y/n): "
+                    read -r confirm
+                    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                        execute_remote_command "$username" "$password" "$hostname" "$port" "docker rm -f $container_ref"
+                        print_success "Command executed"
+                    else
+                        print_info "Operation cancelled"
+                    fi
+                fi
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            5)
+                print_warning "About to remove all stopped containers on remote host"
+                printf "Are you sure? (y/n): "
+                read -r confirm
+                if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                    print_info "Removing stopped containers..."
+                    execute_remote_command "$username" "$password" "$hostname" "$port" "docker container prune -f"
+                    print_success "Command executed"
+                else
+                    print_info "Operation cancelled"
+                fi
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            6)
+                print_warning "This will clean up unused Docker data on remote host"
+                print_info "This includes: stopped containers, unused networks, dangling images"
+                printf "Are you sure? (y/n): "
+                read -r confirm
+                if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                    print_info "Running docker system prune..."
+                    execute_remote_command "$username" "$password" "$hostname" "$port" "docker system prune -f"
+                    print_success "Command executed"
+                else
+                    print_info "Operation cancelled"
+                fi
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            7)
+                printf "Enter custom Docker command (e.g., 'docker ps', 'docker stats --no-stream'): "
+                read -r custom_cmd
+                if [ -z "$custom_cmd" ]; then
+                    print_error "Command cannot be empty"
+                else
+                    print_info "Executing: $custom_cmd"
+                    printf "\n"
+                    execute_remote_command "$username" "$password" "$hostname" "$port" "$custom_cmd"
+                fi
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                print_error "Invalid choice"
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+        esac
+    done
+}
+
+# Function to display help
+show_help() {
+    printf "Usage: %s [OPTIONS]\n" "$(basename "$0")"
+    printf "\n"
+    printf "Docker Management Script with Remote Docker Management via SSH\n"
+    printf "\n"
+    printf "OPTIONS:\n"
+    printf "  -u USERNAME    SSH username for remote Docker management\n"
+    printf "  -p PASSWORD    SSH password (optional, not recommended for security)\n"
+    printf "  -h HOSTNAME    Remote hostname or IP address\n"
+    printf "  -P PORT        SSH port (default: 22)\n"
+    printf "  --help         Show this help message\n"
+    printf "\n"
+    printf "EXAMPLES:\n"
+    printf "  Interactive mode:\n"
+    printf "    %s\n" "$(basename "$0")"
+    printf "\n"
+    printf "  Remote Docker management:\n"
+    printf "    %s -u john -h 192.168.1.100\n" "$(basename "$0")"
+    printf "    %s -u admin -p 'myp@ss' -h server.example.com\n" "$(basename "$0")"
+    printf "    %s -u root -h 10.0.0.1 -P 2222\n" "$(basename "$0")"
+    printf "\n"
+    printf "NOTES:\n"
+    printf "  - Using -p to pass passwords via CLI is insecure. Prefer SSH keys.\n"
+    printf "  - Use single quotes around passwords with special characters\n"
+    printf "  - Remote host must have Docker installed\n"
+    printf "\n"
+}
+
 # Function to display menu
 show_menu() {
     printf "\n"
@@ -638,21 +925,52 @@ show_menu() {
     printf "  2) List Docker Processes\n"
     printf "  3) Delete Docker Images\n"
     printf "  4) Interactive Shell\n"
+    printf "  5) Remote Docker Management (SSH)\n"
     printf "  q) Quit\n"
     printf "========================================\n"
     printf "Enter your choice: "
 }
 
-# Main loop
-main() {
+# Parse command line arguments
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -u)
+                SSH_USERNAME="$2"
+                shift 2
+                ;;
+            -p)
+                SSH_PASSWORD="$2"
+                shift 2
+                ;;
+            -h)
+                SSH_HOSTNAME="$2"
+                shift 2
+                ;;
+            -P)
+                SSH_PORT="$2"
+                shift 2
+                ;;
+            --help)
+                show_help
+                exit 0
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Interactive menu loop
+interactive_mode() {
     # Check if running in interactive terminal
     if [ ! -t 0 ]; then
         print_error "This script requires an interactive terminal"
         exit 1
     fi
-    
-    # Detect OS at startup
-    detect_os
     
     while true; do
         show_menu
@@ -684,6 +1002,14 @@ main() {
                 printf "\nPress Enter to continue..."
                 read -r dummy
                 ;;
+            5)
+                # Check sshpass before starting remote Docker management
+                printf "\n"
+                check_sshpass
+                remote_docker_manager "" "" "" ""
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
             q|Q)
                 print_info "Exiting..."
                 exit 0
@@ -697,5 +1023,32 @@ main() {
     done
 }
 
-# Run main function
-main
+# Main function
+main() {
+    # Detect OS at startup
+    detect_os
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Check sshpass availability at startup (only warn, don't block)
+    if [ -n "$SSH_HOSTNAME" ] || [ -n "$SSH_PASSWORD" ]; then
+        # If SSH parameters were provided, check sshpass
+        printf "\n"
+        check_sshpass
+        printf "Press Enter to continue..."
+        read -r dummy
+    fi
+    
+    # If SSH parameters provided via CLI, start remote Docker management
+    if [ -n "$SSH_HOSTNAME" ]; then
+        remote_docker_manager "$SSH_USERNAME" "$SSH_PASSWORD" "$SSH_HOSTNAME" "$SSH_PORT"
+        exit $?
+    fi
+    
+    # Otherwise, start interactive mode
+    interactive_mode
+}
+
+# Run main function with all arguments
+main "$@"
