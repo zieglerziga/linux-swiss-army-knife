@@ -114,6 +114,190 @@ list_docker_images() {
     return 0
 }
 
+# Function to list docker processes (containers)
+list_docker_processes() {
+    print_info "Listing Docker Processes (Containers)..."
+    printf "\n"
+    
+    # Check if docker is available
+    if ! command -v docker >/dev/null 2>&1; then
+        print_error "Docker command not found"
+        return 1
+    fi
+    
+    # Show running containers
+    print_info "Running containers:"
+    if ! docker ps; then
+        print_error "Failed to list running containers. Is Docker running?"
+        return 1
+    fi
+    
+    printf "\n"
+    printf "Show all containers (including stopped)? (y/n): "
+    read -r show_all
+    
+    if [ "$show_all" = "y" ] || [ "$show_all" = "Y" ]; then
+        printf "\n"
+        print_info "All containers (including stopped):"
+        if ! docker ps -a; then
+            print_error "Failed to list all containers"
+            return 1
+        fi
+        
+        # Offer container management options
+        printf "\n"
+        printf "Container Management Options:\n"
+        printf "  1) Remove stopped container by ID\n"
+        printf "  2) Remove stopped container by name\n"
+        printf "  3) Remove all stopped containers\n"
+        printf "  4) Force remove running container\n"
+        printf "  0) Back to main menu\n"
+        printf "\n"
+        printf "Enter your choice: "
+        read -r container_choice
+        
+        case "$container_choice" in
+            1)
+                printf "Enter CONTAINER ID: "
+                read -r container_id
+                if [ -z "$container_id" ]; then
+                    print_error "CONTAINER ID cannot be empty"
+                    return 1
+                fi
+                
+                # Check if container exists and is stopped
+                status=$(docker ps -a --filter "id=$container_id" --format "{{.Status}}" 2>/dev/null)
+                if [ -z "$status" ]; then
+                    print_error "Container not found: $container_id"
+                    return 1
+                fi
+                
+                print_warning "About to remove container: $container_id"
+                printf "Are you sure? (y/n): "
+                read -r confirm
+                if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                    if docker rm "$container_id"; then
+                        print_success "Container removed successfully"
+                    else
+                        print_error "Failed to remove container. Try force remove? (y/n): "
+                        read -r force_choice
+                        if [ "$force_choice" = "y" ] || [ "$force_choice" = "Y" ]; then
+                            docker rm -f "$container_id"
+                            print_success "Container force removed"
+                        fi
+                    fi
+                else
+                    print_info "Operation cancelled"
+                fi
+                ;;
+            2)
+                printf "Enter CONTAINER NAME: "
+                read -r container_name
+                if [ -z "$container_name" ]; then
+                    print_error "CONTAINER NAME cannot be empty"
+                    return 1
+                fi
+                
+                # Check if container exists
+                status=$(docker ps -a --filter "name=$container_name" --format "{{.Status}}" 2>/dev/null)
+                if [ -z "$status" ]; then
+                    print_error "Container not found: $container_name"
+                    return 1
+                fi
+                
+                print_warning "About to remove container: $container_name"
+                printf "Are you sure? (y/n): "
+                read -r confirm
+                if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                    if docker rm "$container_name"; then
+                        print_success "Container removed successfully"
+                    else
+                        print_error "Failed to remove container. Try force remove? (y/n): "
+                        read -r force_choice
+                        if [ "$force_choice" = "y" ] || [ "$force_choice" = "Y" ]; then
+                            docker rm -f "$container_name"
+                            print_success "Container force removed"
+                        fi
+                    fi
+                else
+                    print_info "Operation cancelled"
+                fi
+                ;;
+            3)
+                # Get list of stopped containers
+                stopped_containers=$(docker ps -a -q -f status=exited 2>/dev/null)
+                
+                if [ -z "$stopped_containers" ]; then
+                    print_info "No stopped containers found"
+                    return 0
+                fi
+                
+                printf "\n"
+                print_info "Stopped containers:"
+                docker ps -a -f status=exited
+                printf "\n"
+                
+                print_warning "This will remove ALL stopped containers"
+                printf "Are you sure? (y/n): "
+                read -r confirm
+                if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+                    print_info "Removing stopped containers..."
+                    if docker container prune -f; then
+                        print_success "All stopped containers removed successfully"
+                    else
+                        print_error "Failed to remove stopped containers"
+                        return 1
+                    fi
+                else
+                    print_info "Operation cancelled"
+                fi
+                ;;
+            4)
+                printf "Enter CONTAINER ID or NAME to force remove: "
+                read -r container_ref
+                if [ -z "$container_ref" ]; then
+                    print_error "CONTAINER reference cannot be empty"
+                    return 1
+                fi
+                
+                # Check if container exists
+                status=$(docker ps -a --filter "id=$container_ref" --format "{{.Status}}" 2>/dev/null)
+                if [ -z "$status" ]; then
+                    status=$(docker ps -a --filter "name=$container_ref" --format "{{.Status}}" 2>/dev/null)
+                fi
+                
+                if [ -z "$status" ]; then
+                    print_error "Container not found: $container_ref"
+                    return 1
+                fi
+                
+                print_error "WARNING: This will force remove a container (even if running)"
+                printf "Type 'FORCE REMOVE' to confirm: "
+                read -r confirm
+                if [ "$confirm" = "FORCE REMOVE" ]; then
+                    if docker rm -f "$container_ref"; then
+                        print_success "Container force removed successfully"
+                    else
+                        print_error "Failed to force remove container"
+                        return 1
+                    fi
+                else
+                    print_info "Operation cancelled"
+                fi
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                print_info "No action selected"
+                return 0
+                ;;
+        esac
+    fi
+    
+    return 0
+}
+
 # Function to delete docker images
 delete_docker_images() {
     print_info "Docker Image Deletion Menu"
@@ -451,8 +635,9 @@ show_menu() {
         printf "  0) Check Docker Status\n"
     fi
     printf "  1) List Docker Images\n"
-    printf "  2) Delete Docker Images\n"
-    printf "  3) Interactive Shell\n"
+    printf "  2) List Docker Processes\n"
+    printf "  3) Delete Docker Images\n"
+    printf "  4) Interactive Shell\n"
     printf "  q) Quit\n"
     printf "========================================\n"
     printf "Enter your choice: "
@@ -485,11 +670,16 @@ main() {
                 read -r dummy
                 ;;
             2)
-                delete_docker_images
+                list_docker_processes
                 printf "\nPress Enter to continue..."
                 read -r dummy
                 ;;
             3)
+                delete_docker_images
+                printf "\nPress Enter to continue..."
+                read -r dummy
+                ;;
+            4)
                 interactive_shell
                 printf "\nPress Enter to continue..."
                 read -r dummy
