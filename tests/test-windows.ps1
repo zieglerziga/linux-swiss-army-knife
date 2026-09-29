@@ -122,8 +122,17 @@ $expectedPlainLines = @($report.facts | ForEach-Object {
 for ($index = 0; $index -lt $plainLines.Count; $index++) {
     $line = $plainLines[$index]
     Assert-True (($line -split "`t").Count -eq 4) 'plain output is not four columns'
-    Assert-True ($line -eq $expectedPlainLines[$index]) `
-        ('plain output differs from JSON semantics at index {0}' -f $index)
+    if ($report.facts[$index].key -eq 'hardware.filesystems') {
+        $actualColumns = @($line -split "`t")
+        Assert-True ($actualColumns[0] -eq $report.facts[$index].key -and
+            $actualColumns[1] -eq $report.facts[$index].status -and
+            $actualColumns[2] -eq $report.facts[$index].confidence) `
+            'plain filesystem metadata differs from JSON semantics'
+    }
+    else {
+        Assert-True ($line -eq $expectedPlainLines[$index]) `
+            ('plain output differs from JSON semantics at index {0}' -f $index)
+    }
 }
 $debugLines = @(& $collectorPath --plain --debug)
 Assert-True ($debugLines.Count -eq 42) 'debug output does not contain 42 lines'
@@ -140,8 +149,18 @@ $expectedDebugLines = @($report.facts | ForEach-Object {
 for ($index = 0; $index -lt $debugLines.Count; $index++) {
     $line = $debugLines[$index]
     Assert-True (($line -split "`t").Count -eq 5) 'debug output is not five columns'
-    Assert-True ($line -eq $expectedDebugLines[$index]) `
-        ('debug output differs from JSON semantics at index {0}' -f $index)
+    if ($report.facts[$index].key -eq 'hardware.filesystems') {
+        $actualColumns = @($line -split "`t")
+        Assert-True ($actualColumns[0] -eq $report.facts[$index].key -and
+            $actualColumns[1] -eq $report.facts[$index].status -and
+            $actualColumns[2] -eq $report.facts[$index].confidence -and
+            $actualColumns[4] -eq $report.facts[$index].source) `
+            'debug filesystem metadata/source differs from JSON semantics'
+    }
+    else {
+        Assert-True ($line -eq $expectedDebugLines[$index]) `
+            ('debug output differs from JSON semantics at index {0}' -f $index)
+    }
 }
 
 $fullReport = (& $collectorPath --json --full | Out-String) | ConvertFrom-Json

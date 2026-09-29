@@ -966,10 +966,11 @@ collect_linux_default_route()
                     return result
                 }
                 $1 == "00000000000000000000000000000000" && $2 == "00" {
+                    if (tolower($6) == "ffffffff") next
                     metric=hex_value($6)
                     flags=hex_value($9)
                     reject=int(flags / 512) % 2
-                    if (metric < 0 || metric == 4294967295 || reject == 1) next
+                    if (metric < 0 || reject == 1) next
                     if (selected && metric >= selected_metric) next
                     gateway=$5
                     formatted=substr(gateway,1,4)
