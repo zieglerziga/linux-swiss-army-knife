@@ -956,29 +956,19 @@ collect_linux_default_route()
             route_probe_attempted=1
             route_probe_succeeded=1
             route_data=$(awk '
-                function hex_value(value, result, position, digit) {
-                    result=0
-                    for (position=1; position<=length(value); position++) {
-                        digit=index("0123456789ABCDEF", toupper(substr(value,position,1))) - 1
-                        if (digit < 0) return -1
-                        result=result * 16 + digit
-                    }
-                    return result
-                }
                 $1 == "00000000000000000000000000000000" && $2 == "00" {
                     if (tolower($6) == "ffffffff") next
-                    metric=hex_value($6)
-                    flags=hex_value($9)
-                    reject=int(flags / 512) % 2
-                    if (metric < 0 || reject == 1) next
-                    if (selected && metric >= selected_metric) next
+                    reject_nibble=toupper(substr($9, length($9) - 2, 1))
+                    if (reject_nibble ~ /[2367ABEF]/) next
+                    metric_key="x" toupper($6)
+                    if (selected != "" && metric_key >= selected_metric) next
                     gateway=$5
                     formatted=substr(gateway,1,4)
                     for (position=5; position<=32; position+=4) {
                         formatted=formatted ":" substr(gateway,position,4)
                     }
                     selected=$10 "|" formatted
-                    selected_metric=metric
+                    selected_metric=metric_key
                 }
                 END { print selected }
             ' "$ipv6_route_path")
