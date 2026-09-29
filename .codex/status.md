@@ -314,7 +314,16 @@ fix any new native-platform findings before merge.
 - Commit `ec82d4e` removes `awk` from `/proc/net/ipv6_route` parsing entirely.
   Filtering, reject-bit matching, hexadecimal metric conversion, and best-route
   selection now use POSIX shell operations; only address colon insertion uses
-  portable `sed`. Hosted CI for this head is pending push.
+  portable `sed`.
+- Shell-parser head `11ff904da573092226cdb9ceecb87134501e038d` ran as
+  [GitHub Actions run 36640589143](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36640589143),
+  and fixture-copy head `f78700a2722142b327d9b9497996e8325d06f42f`
+  ran as [GitHub Actions run 36640790485](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36640790485).
+  The enhanced failure message reported `status=unsupported` with the fixture
+  file readable. This proved macOS Bash 3.2 retained `SWISS_TEST_PLATFORM` from
+  the preceding function-scoped adapter assignment; the Linux route collector
+  had not run. Commit `50d7e27` pins the Linux adapter explicitly for both
+  Linux-only fixtures. Hosted CI for this head is pending push.
 
 ### Branch and commit
 
@@ -323,6 +332,7 @@ fix any new native-platform findings before merge.
 - Native CI follow-up: `eda95e7`
 - Portable route-flag follow-up: `f26d885`
 - Portable shell route parser: `ec82d4e`
+- Linux fixture adapter pin: `50d7e27`
 - This status update: `uncommitted`
 
 ### Safe next step
