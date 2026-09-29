@@ -290,12 +290,20 @@ fix any new native-platform findings before merge.
   validation, route/fallback fixtures, and PowerShell 7 tests.
 - `SWISS_EXPECTED_PLATFORM=linux sh scripts/smoke-posix.sh`: passed on the
   Omarchy Steam Deck with the strengthened native fact assertions.
-- Hosted CI for exact remediation head: pending push.
+- Remediation head `c5fdc31cfaf7bbd398c8dd6eacda60cc5a08c25a` ran as
+  [GitHub Actions run 36638901709](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36638901709).
+  Linux passed. macOS exposed a BSD `awk` numeric-comparison portability issue
+  in the IPv6 reject sentinel fixture; Windows exposed expected free-space
+  changes between independent JSON/plain/debug collections. Commit `eda95e7`
+  uses a textual sentinel check and compares stable filesystem metadata/source
+  while retaining exact parity checks for stable facts.
+- Hosted CI for the follow-up fix head: pending push.
 
 ### Branch and commit
 
 - Branch: `codex/read-only-inspector-v1`
 - Implementation remediation: `8b2365c`
+- Native CI follow-up: `eda95e7`
 - This status update: `uncommitted`
 
 ### Safe next step
