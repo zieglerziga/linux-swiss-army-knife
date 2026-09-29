@@ -297,13 +297,21 @@ fix any new native-platform findings before merge.
   changes between independent JSON/plain/debug collections. Commit `eda95e7`
   uses a textual sentinel check and compares stable filesystem metadata/source
   while retaining exact parity checks for stable facts.
-- Hosted CI for the follow-up fix head: pending push.
+- Follow-up head `114d6cc8547b7e3092631382de2764346fc029ff` ran as
+  [GitHub Actions run 36639243581](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36639243581).
+  All Linux and Windows jobs passed; macOS still exposed numeric hexadecimal
+  flag parsing in its older `awk`. Commit `f26d885` removes numeric conversion
+  entirely: fixed-width metrics are compared as forced strings and the reject
+  bit is tested from its hexadecimal nibble. The fixture passes locally with
+  current One True AWK (`nawk`) as well as GNU and BusyBox awk.
+- Hosted CI for the portable flag comparison head: pending push.
 
 ### Branch and commit
 
 - Branch: `codex/read-only-inspector-v1`
 - Implementation remediation: `8b2365c`
 - Native CI follow-up: `eda95e7`
+- Portable route-flag follow-up: `f26d885`
 - This status update: `uncommitted`
 
 ### Safe next step
