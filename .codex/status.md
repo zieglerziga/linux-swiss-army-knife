@@ -224,7 +224,11 @@ No machine-identifying report values were added to the repository or this log.
   Linux and macOS rows passed, but all Windows rows failed because Windows
   PowerShell returned multiple `bash.exe` applications and the validator
   coerced them into one invalid path. Commit `b4d056e` selects the first exact
-  application. The feature-head CI run is pending.
+  application.
+- Feature head `aa9ad727ff8dc6fe3fd36e383f37f5943f6884c6` ran as
+  [GitHub Actions run 36637008207](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36637008207).
+  All 18 Linux, macOS, and Windows jobs passed, including both Windows
+  PowerShell 5.1 and PowerShell 7 collector tests.
 
 ### Branch and commits
 
@@ -233,19 +237,69 @@ No machine-identifying report values were added to the repository or this log.
 - `86729ab` — `test(inspector): enforce schema and safety contract`
 - `52c6e11` — `ci(validation): execute collector quality gates`
 - `b4d056e` — `fix(ci): select one Git Bash executable`
-- Documentation/status changes in this entry: `uncommitted`
+- `aa9ad72` — `docs(inspector): document usage and review evidence`
+- `8b2365c` — `fix(inspector): address native and safety review`
 
 ### Known limitations
 
-- Native macOS and Windows probe behavior awaits the feature branch's hosted
-  CI run; local Windows-path tests used PowerShell 7 on Linux plus an emulated
-  Windows control path.
-- Independent follow-up review remains pending because reviewer usage was
-  exhausted.
+- The native review-remediation commit `8b2365c` awaits its hosted matrix run.
 - BSD support is a best-effort portable baseline rather than release-grade
   platform coverage.
 
 ### Safe next step
 
-Push the feature branch, open a pull request, wait for every job on the exact
-head, fix any native-platform findings, and rerun the full matrix before merge.
+Push the review-remediation commit, wait for every job on the exact head, and
+fix any new native-platform findings before merge.
+
+## 2026-09-30: follow-up native and safety review remediation
+
+### Changed
+
+- Corrected macOS uptime parsing so `kern.boottime` cannot confuse `usec` with
+  `sec`, made ambiguous macOS `en*` interface types `unknown`, and added an
+  IPv6 default-route fallback.
+- Filtered Linux IPv6 reject-route sentinels, distinguished failed probes from
+  absent data, and added BusyBox-only filesystem fallback coverage with a
+  positive local-filesystem allowlist.
+- Corrected Windows machine-wide logical CPU count and made default-route
+  probing cover IPv4, IPv6, and CIM fallback with explicit success/failure
+  states.
+- Replaced safety claims based only on denylist matching with a tokenized POSIX
+  command allowlist and PowerShell AST command/API allowlist. Fixed the
+  unmatched workflow-glob bug that had disabled workflow policy scanning.
+- Strengthened native smoke assertions, Windows plain/debug parity checks,
+  macOS fixture semantics, and documented inventory percent encoding.
+
+### Review resolutions
+
+- Portability review findings for macOS uptime, ambiguous interface typing,
+  IPv6-only routing, and BusyBox external-tool coverage were fixed.
+- Security review findings for Linux IPv6 routing, Windows route fallback,
+  Windows multi-socket CPU count, structural allowlisting, and failure status
+  semantics were fixed.
+- Test review findings for workflow scanning, structural source policy, native
+  semantic assertions, output parity, and inventory wire encoding were fixed.
+- Two reported security findings were verified as stale: filesystem fallback
+  already used a positive local-filesystem allowlist, and Windows physical
+  disk enumeration was already gated by `--full`.
+
+### Verification
+
+- `sh scripts/verify.sh`: passed under `/bin/sh`, Dash, BusyBox `ash`, and Bash
+  POSIX mode, including ShellCheck, structural safety audits, JSON Schema
+  validation, route/fallback fixtures, and PowerShell 7 tests.
+- `SWISS_EXPECTED_PLATFORM=linux sh scripts/smoke-posix.sh`: passed on the
+  Omarchy Steam Deck with the strengthened native fact assertions.
+- Hosted CI for exact remediation head: pending push.
+
+### Branch and commit
+
+- Branch: `codex/read-only-inspector-v1`
+- Implementation remediation: `8b2365c`
+- This status update: `uncommitted`
+
+### Safe next step
+
+Commit this status update, push the branch, and watch the full hosted matrix on
+the resulting exact head until all jobs pass or a concrete native failure is
+fixed.
