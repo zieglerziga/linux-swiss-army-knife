@@ -955,23 +955,31 @@ collect_linux_default_route()
         if [ -r "$ipv6_route_path" ]; then
             route_probe_attempted=1
             route_probe_succeeded=1
-            route_data=$(awk '
-                $1 == "00000000000000000000000000000000" && $2 == "00" {
-                    if (tolower($6) == "ffffffff") next
-                    reject_nibble=toupper(substr($9, length($9) - 2, 1))
-                    if (reject_nibble ~ /[2367ABEF]/) next
-                    metric_key="x" toupper($6)
-                    if (selected != "" && metric_key >= selected_metric) next
-                    gateway=$5
-                    formatted=substr(gateway,1,4)
-                    for (position=5; position<=32; position+=4) {
-                        formatted=formatted ":" substr(gateway,position,4)
-                    }
-                    selected=$10 "|" formatted
-                    selected_metric=metric_key
-                }
-                END { print selected }
-            ' "$ipv6_route_path")
+            selected_ipv6_route=
+            selected_ipv6_metric=
+            while IFS=' ' read -r ipv6_destination ipv6_destination_prefix \
+                _ipv6_source _ipv6_source_prefix ipv6_gateway ipv6_metric \
+                _ipv6_refcount _ipv6_use ipv6_flags ipv6_interface _ipv6_extra; do
+                [ "$ipv6_destination" = 00000000000000000000000000000000 ] || continue
+                [ "$ipv6_destination_prefix" = 00 ] || continue
+                case "$ipv6_metric" in
+                    ffffffff|FFFFFFFF) continue ;;
+                esac
+                case "$ipv6_flags" in
+                    ?????[2367aAbBeEfF]??) continue ;;
+                esac
+                hex_to_decimal "$ipv6_metric"
+                [ -n "$HEX_VALUE" ] || continue
+                if [ -n "$selected_ipv6_route" ] &&
+                    [ "$HEX_VALUE" -ge "$selected_ipv6_metric" ]; then
+                    continue
+                fi
+                formatted_ipv6_gateway=$(printf '%s\n' "$ipv6_gateway" |
+                    sed 's/\(....\)/\1:/g; s/:$//')
+                selected_ipv6_route="$ipv6_interface|$formatted_ipv6_gateway"
+                selected_ipv6_metric=$HEX_VALUE
+            done < "$ipv6_route_path"
+            route_data=$selected_ipv6_route
             [ -z "$route_data" ] || route_source=$ipv6_route_source
         fi
     fi
@@ -1014,6 +1022,27 @@ collect_linux_default_route()
         emit_fact network.default_route.interface '' missing "$route_source/ip" exact
         emit_fact network.default_route.gateway '' missing "$route_source/ip" exact
     fi
+}
+
+hex_to_decimal()
+{
+    hex_remaining=$1
+    HEX_VALUE=0
+    while [ -n "$hex_remaining" ]; do
+        hex_character=${hex_remaining%"${hex_remaining#?}"}
+        hex_remaining=${hex_remaining#?}
+        case "$hex_character" in
+            [0-9]) hex_digit=$hex_character ;;
+            a|A) hex_digit=10 ;;
+            b|B) hex_digit=11 ;;
+            c|C) hex_digit=12 ;;
+            d|D) hex_digit=13 ;;
+            e|E) hex_digit=14 ;;
+            f|F) hex_digit=15 ;;
+            *) HEX_VALUE=; return ;;
+        esac
+        HEX_VALUE=$((HEX_VALUE * 16 + hex_digit))
+    done
 }
 
 sysctl_value()
