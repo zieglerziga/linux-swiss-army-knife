@@ -124,7 +124,8 @@ jq -e '
     fail 'macOS adapter fixture semantics are incorrect'
 
 ipv6_fixture=$test_directory/linux-ipv6
-cp -R "$fixture_root" "$ipv6_fixture"
+mkdir -p "$ipv6_fixture"
+cp -R "$fixture_root/." "$ipv6_fixture/"
 printf '%s\n' 'Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT' \
     >"$ipv6_fixture/proc/net/route"
 printf '%s\n' \
@@ -141,13 +142,17 @@ ipv6_gateway=$(jq -r '.facts[] | select(.key == "network.default_route.gateway")
     "$test_directory/ipv6.json")
 if [ "$ipv6_exists" != true ] || [ "$ipv6_interface" != eth0 ] ||
     [ "$ipv6_gateway" != '2001:0db8:0000:0000:0000:0000:0000:0001' ]; then
-    fail "IPv6 route mismatch: exists=$ipv6_exists interface=$ipv6_interface gateway=$ipv6_gateway"
+    ipv6_exists_status=$(jq -r \
+        '.facts[] | select(.key == "network.default_route.exists") | .status' \
+        "$test_directory/ipv6.json")
+    fail "IPv6 route mismatch: exists=$ipv6_exists status=$ipv6_exists_status interface=$ipv6_interface gateway=$ipv6_gateway readable=$([ -r "$ipv6_fixture/proc/net/ipv6_route" ] && printf yes || printf no)"
 fi
 
 if command -v busybox >/dev/null 2>&1; then
     busybox_fixture=$test_directory/linux-busybox-df
     busybox_bin=$test_directory/busybox-bin
-    cp -R "$fixture_root" "$busybox_fixture"
+    mkdir -p "$busybox_fixture"
+    cp -R "$fixture_root/." "$busybox_fixture/"
     rm -f "$busybox_fixture/fixtures/filesystems.txt"
     printf '%s\n' \
         '/dev/root / ext4 rw,relatime 0 0' \
