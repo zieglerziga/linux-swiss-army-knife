@@ -132,7 +132,8 @@ printf '%s\n' \
     '00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200 lo' \
     '00000000000000000000000000000000 00 00000000000000000000000000000000 00 20010db8000000000000000000000001 00000064 00000000 00000000 00000003 eth0' \
     >"$ipv6_fixture/proc/net/ipv6_route"
-SWISS_FIXTURE_ROOT=$ipv6_fixture run_collector --json >"$test_directory/ipv6.json" ||
+SWISS_FIXTURE_ROOT=$ipv6_fixture SWISS_TEST_PLATFORM=linux \
+    run_collector --json >"$test_directory/ipv6.json" ||
     fail 'IPv6-only route fixture collection failed'
 ipv6_exists=$(jq -r '.facts[] | select(.key == "network.default_route.exists") | .value' \
     "$test_directory/ipv6.json")
@@ -162,7 +163,8 @@ if command -v busybox >/dev/null 2>&1; then
     mkdir -p "$busybox_bin"
     busybox --install -s "$busybox_bin"
     PATH=$busybox_bin SWISS_FIXTURE_ROOT=$busybox_fixture \
-        SWISS_TEST_ALLOW_COMMAND=df "$busybox_bin/sh" "$repository_root/swiss.sh" --json \
+        SWISS_TEST_PLATFORM=linux SWISS_TEST_ALLOW_COMMAND=df \
+        "$busybox_bin/sh" "$repository_root/swiss.sh" --json \
         >"$test_directory/busybox-df.json" ||
         fail 'BusyBox-only filesystem fallback collection failed'
     jq -e '
