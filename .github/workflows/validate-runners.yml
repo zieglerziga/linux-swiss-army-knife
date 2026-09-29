@@ -1,0 +1,181 @@
+name: Validate GitHub-hosted runners
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-runners-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux - ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-slim
+            architecture: X64
+            os_version: any
+          - runner: ubuntu-22.04
+            architecture: X64
+            os_version: "22.04"
+          - runner: ubuntu-22.04-arm
+            architecture: ARM64
+            os_version: "22.04"
+          - runner: ubuntu-24.04
+            architecture: X64
+            os_version: "24.04"
+          - runner: ubuntu-24.04-arm
+            architecture: ARM64
+            os_version: "24.04"
+          - runner: ubuntu-26.04
+            architecture: X64
+            os_version: "26.04"
+          - runner: ubuntu-26.04-arm
+            architecture: ARM64
+            os_version: "26.04"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate runner platform and version
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          EXPECTED_RUNNER_OS: Linux
+          EXPECTED_RUNNER_ARCH: ${{ matrix.architecture }}
+          EXPECTED_OS_VERSION: ${{ matrix.os_version }}
+          EXPECTED_XCODE_MAJOR: none
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+        run: sh scripts/validate-runner-posix.sh
+
+      - name: Parse tracked shell scripts without executing them
+        shell: bash
+        run: sh scripts/validate-posix.sh
+
+  macos:
+    name: macOS - ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            architecture: ARM64
+            os_version: "14"
+            xcode_major: none
+          - runner: macos-15
+            architecture: ARM64
+            os_version: "15"
+            xcode_major: none
+          - runner: macos-15-intel
+            architecture: X64
+            os_version: "15"
+            xcode_major: none
+          - runner: macos-26
+            architecture: ARM64
+            os_version: "26"
+            xcode_major: none
+          - runner: macos-26-intel
+            architecture: X64
+            os_version: "26"
+            xcode_major: none
+          - runner: xcode-27
+            architecture: ARM64
+            os_version: "27"
+            xcode_major: "27"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate runner platform and version
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          EXPECTED_RUNNER_OS: macOS
+          EXPECTED_RUNNER_ARCH: ${{ matrix.architecture }}
+          EXPECTED_OS_VERSION: ${{ matrix.os_version }}
+          EXPECTED_XCODE_MAJOR: ${{ matrix.xcode_major }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+        run: sh scripts/validate-runner-posix.sh
+
+      - name: Parse tracked shell scripts without executing them
+        shell: bash
+        run: sh scripts/validate-posix.sh
+
+  windows:
+    name: Windows - ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            architecture: X64
+            os_family: server-2022
+            vs_major: none
+          - runner: windows-2025
+            architecture: X64
+            os_family: server-2025
+            vs_major: none
+          - runner: windows-2025-vs2026
+            architecture: X64
+            os_family: server-2025
+            vs_major: "18"
+          - runner: windows-11-arm
+            architecture: ARM64
+            os_family: windows-11
+            vs_major: any
+          - runner: windows-11-vs2026-arm
+            architecture: ARM64
+            os_family: windows-11
+            vs_major: "18"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate with Windows PowerShell 5.1
+        shell: powershell
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          EXPECTED_RUNNER_OS: Windows
+          EXPECTED_RUNNER_ARCH: ${{ matrix.architecture }}
+          EXPECTED_OS_FAMILY: ${{ matrix.os_family }}
+          EXPECTED_VS_MAJOR: ${{ matrix.vs_major }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+        run: .\scripts\validate-windows.ps1
+
+      - name: Validate with PowerShell 7
+        shell: pwsh
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          EXPECTED_RUNNER_OS: Windows
+          EXPECTED_RUNNER_ARCH: ${{ matrix.architecture }}
+          EXPECTED_OS_FAMILY: ${{ matrix.os_family }}
+          EXPECTED_VS_MAJOR: ${{ matrix.vs_major }}
+          ACTUAL_RUNNER_OS: ${{ runner.os }}
+          ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
+        run: .\scripts\validate-windows.ps1
