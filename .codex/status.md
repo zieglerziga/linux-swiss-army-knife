@@ -304,7 +304,17 @@ fix any new native-platform findings before merge.
   entirely: fixed-width metrics are compared as forced strings and the reject
   bit is tested from its hexadecimal nibble. The fixture passes locally with
   current One True AWK (`nawk`) as well as GNU and BusyBox awk.
-- Hosted CI for the portable flag comparison head: pending push.
+- Portable-flag head `9e67e0f398b9ae244a5d69215d2f10118ffbccfa`
+  ran as [GitHub Actions run 36639978022](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36639978022).
+  Linux and Windows passed; all macOS jobs still returned an empty route fact.
+- Diagnostic head `33000864c10957516b2572e053ab2e91219af004`
+  ran as [GitHub Actions run 36640254254](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36640254254)
+  and confirmed `exists`, interface, and gateway were all empty, isolating the
+  issue to candidate parsing rather than IPv6 presentation.
+- Commit `ec82d4e` removes `awk` from `/proc/net/ipv6_route` parsing entirely.
+  Filtering, reject-bit matching, hexadecimal metric conversion, and best-route
+  selection now use POSIX shell operations; only address colon insertion uses
+  portable `sed`. Hosted CI for this head is pending push.
 
 ### Branch and commit
 
@@ -312,6 +322,7 @@ fix any new native-platform findings before merge.
 - Implementation remediation: `8b2365c`
 - Native CI follow-up: `eda95e7`
 - Portable route-flag follow-up: `f26d885`
+- Portable shell route parser: `ec82d4e`
 - This status update: `uncommitted`
 
 ### Safe next step
