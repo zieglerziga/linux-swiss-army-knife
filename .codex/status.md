@@ -151,3 +151,101 @@ review passes.
 Create a scoped commit such as
 `ci(validation): cover all hosted runner versions`, push it when authorized,
 and wait for all 18 jobs on that exact commit before claiming CI success.
+
+## 2026-09-29: cross-platform read-only collectors
+
+### Changed
+
+- Added `swiss.sh`, a single-file POSIX collector with Linux, BusyBox, macOS,
+  BSD-baseline, human, plain, debug, full, and JSON paths.
+- Added `swiss.ps1`, a matching 42-field Windows collector compatible with
+  Windows PowerShell 5.1 syntax and modern PowerShell.
+- Added the exact version-one field manifest and JSON Schema, sanitized Linux
+  fixtures, a small standard-library schema validator, source-policy checks,
+  and behavior tests for POSIX shells and PowerShell.
+- Changed filesystem capacity collection to local filesystems only. macOS
+  storage/firmware and Windows physical-disk enumeration require `--full`.
+- Added platform CI smokes and collector tests to the existing 18-runner
+  matrix, plus user documentation covering execution and report privacy.
+
+### Why
+
+The repository's first feature target is one familiar, dependency-free,
+read-only report model across Linux/macOS and Windows. The implementation must
+remain useful on this Omarchy Steam Deck and on reduced BusyBox systems while
+degrading per fact when a command or local interface is unavailable.
+
+### Reviews and resolutions
+
+Two independent initial read-only reviews produced substantive findings:
+
+- The systems/security review found that unrestricted `df -Pk` could contact
+  mounted network filesystems, the source-policy check was bypassable, CI did
+  not run behavior tests, fixtures leaked live host facts, IPv6/fallback route
+  handling was incomplete, inventories lacked delimiter escaping, and the
+  schema did not enforce canonical keys.
+- The test-architect review additionally found non-canonical macOS/unknown
+  field order, missing Windows enforcement, weak plain/debug parity checks,
+  and missing hostile-value, `--full`, and cross-adapter coverage.
+
+Resolved by using local-only filesystem enumeration, moving potentially
+expensive storage queries behind `--full`, hermetically disabling command
+probes in fixtures, adding IPv6 and failed-command fallbacks, percent-encoding
+inventory delimiters, validating exactly 42 ordered keys, comparing all output
+modes, requiring both entry points, and running shared/native tests in CI.
+
+Follow-up review attempts and the dedicated portability reviewer could not
+complete because the reviewer account reached its usage limit. Therefore this
+entry records the initial review findings and verified fixes but does not claim
+independent follow-up approval. The limitation is explicit rather than treating
+the failed reviewer turns as successful reviews.
+
+### Verification
+
+- Installed Dash, BusyBox, ShellCheck, and PowerShell 7.6.6 through Omarchy's
+  package workflow with GUI authentication; the account has full passworded
+  sudo rights through `wheel`.
+- `scripts/verify.sh`: passed under `/bin/sh`, Dash, BusyBox `ash`, Bash POSIX
+  mode, ShellCheck, PowerShell 7.6.6, source-policy tests, schema validation,
+  negative schema tests, and sanitized fixture tests.
+- `SWISS_EXPECTED_PLATFORM=linux sh scripts/smoke-posix.sh`: passed on the
+  Omarchy Steam Deck.
+- A Bubblewrap smoke with a read-only root and detached network namespace
+  produced valid 42-field Linux JSON.
+- Ruby JSON/YAML parsing, the 18-row matrix assertion, PowerShell AST parsing,
+  `git diff --check`, and immutable-checkout assertions passed locally.
+
+No machine-identifying report values were added to the repository or this log.
+
+### CI runs
+
+- Bootstrap commit `3d2fa30530399024a914b3b313a421ffa4864fe4` ran as
+  [GitHub Actions run 36631092215](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36631092215).
+  Linux and macOS rows passed, but all Windows rows failed because Windows
+  PowerShell returned multiple `bash.exe` applications and the validator
+  coerced them into one invalid path. Commit `b4d056e` selects the first exact
+  application. The feature-head CI run is pending.
+
+### Branch and commits
+
+- Branch: `codex/read-only-inspector-v1`
+- `981055a` — `feat(inspector): add cross-platform read-only collectors`
+- `86729ab` — `test(inspector): enforce schema and safety contract`
+- `52c6e11` — `ci(validation): execute collector quality gates`
+- `b4d056e` — `fix(ci): select one Git Bash executable`
+- Documentation/status changes in this entry: `uncommitted`
+
+### Known limitations
+
+- Native macOS and Windows probe behavior awaits the feature branch's hosted
+  CI run; local Windows-path tests used PowerShell 7 on Linux plus an emulated
+  Windows control path.
+- Independent follow-up review remains pending because reviewer usage was
+  exhausted.
+- BSD support is a best-effort portable baseline rather than release-grade
+  platform coverage.
+
+### Safe next step
+
+Push the feature branch, open a pull request, wait for every job on the exact
+head, fix any native-platform findings, and rerun the full matrix before merge.
