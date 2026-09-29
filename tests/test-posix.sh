@@ -133,13 +133,16 @@ printf '%s\n' \
     >"$ipv6_fixture/proc/net/ipv6_route"
 SWISS_FIXTURE_ROOT=$ipv6_fixture run_collector --json >"$test_directory/ipv6.json" ||
     fail 'IPv6-only route fixture collection failed'
-jq -e '
-    (.facts[] | select(.key == "network.default_route.exists") | .value == "true") and
-    (.facts[] | select(.key == "network.default_route.interface") | .value == "eth0") and
-    (.facts[] | select(.key == "network.default_route.gateway") |
-        .value == "2001:0db8:0000:0000:0000:0000:0000:0001")
-' "$test_directory/ipv6.json" >/dev/null ||
-    fail 'IPv6 reject sentinel was selected instead of the usable default route'
+ipv6_exists=$(jq -r '.facts[] | select(.key == "network.default_route.exists") | .value' \
+    "$test_directory/ipv6.json")
+ipv6_interface=$(jq -r '.facts[] | select(.key == "network.default_route.interface") | .value' \
+    "$test_directory/ipv6.json")
+ipv6_gateway=$(jq -r '.facts[] | select(.key == "network.default_route.gateway") | .value' \
+    "$test_directory/ipv6.json")
+if [ "$ipv6_exists" != true ] || [ "$ipv6_interface" != eth0 ] ||
+    [ "$ipv6_gateway" != '2001:0db8:0000:0000:0000:0000:0000:0001' ]; then
+    fail "IPv6 route mismatch: exists=$ipv6_exists interface=$ipv6_interface gateway=$ipv6_gateway"
+fi
 
 if command -v busybox >/dev/null 2>&1; then
     busybox_fixture=$test_directory/linux-busybox-df
