@@ -17,6 +17,11 @@ Allowed command families:
   `sw_vers`, `sysctl -n`, and narrowly scoped `diskutil`/`system_profiler`
   queries in `--full`.
 
+The machine-enforced command inventory is
+`schema/posix-command-allowlist.txt`. CI lexes shell command positions,
+rejects dynamic command dispatch and output redirection outside `/dev/null`,
+and requires every allowlist entry to be exercised by the audit.
+
 Direct reads are limited to ordinary operating-system metadata under `/etc`,
 `/proc`, `/sys`, and device-tree paths. Block devices are never opened.
 
@@ -33,3 +38,6 @@ Allowed APIs and cmdlets:
 The source-policy test rejects known elevation, package-manager, active-network,
 mount, service-control, shutdown, registry-write, and configuration commands.
 Physical-disk enumeration is restricted to explicit `--full` mode.
+PowerShell's parser is also used to enumerate every command invocation; only
+the cmdlets above and collector-local functions are accepted. Dynamic command
+dispatch and networking or mutating .NET API families are rejected.

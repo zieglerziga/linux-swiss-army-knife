@@ -19,6 +19,7 @@ PLATFORM_ADAPTER=unknown
 COLLECTION_TIMESTAMP=unknown
 SWISS_FIXTURE_ROOT=${SWISS_FIXTURE_ROOT:-}
 SWISS_TEST_PLATFORM=${SWISS_TEST_PLATFORM:-}
+SWISS_TEST_ALLOW_COMMAND=${SWISS_TEST_ALLOW_COMMAND:-}
 FIXTURE_MODE=0
 ICONV_AVAILABLE=0
 [ -z "$SWISS_FIXTURE_ROOT" ] || FIXTURE_MODE=1
@@ -93,7 +94,9 @@ parse_arguments()
 
 has_command()
 {
-    [ "$FIXTURE_MODE" -eq 0 ] || return 1
+    if [ "$FIXTURE_MODE" -eq 1 ]; then
+        [ "$SWISS_TEST_ALLOW_COMMAND" = "$1" ] || return 1
+    fi
     command -v "$1" >/dev/null 2>&1
 }
 
@@ -441,11 +444,13 @@ collect_filesystems()
             filesystem_summary=$(sed -n '1p' "$filesystem_fixture")
             emit_detected hardware.filesystems "$filesystem_summary" \
                 'sanitized fixture' exact
-        else
+            return
+        elif [ "$SWISS_TEST_ALLOW_COMMAND" != df ]; then
             emit_fact hardware.filesystems '' missing 'sanitized fixture' exact
+            return
         fi
-        return
-    elif ! has_command df; then
+    fi
+    if ! has_command df; then
         emit_fact hardware.filesystems '' missing df exact
         return
     fi
@@ -554,15 +559,22 @@ collect_network_addresses()
 {
     network_addresses=
     network_addresses_source=
+    network_addresses_attempted=0
+    network_addresses_succeeded=0
+    network_addresses_failed=0
 
     if [ "$FIXTURE_MODE" -eq 1 ]; then
         network_address_fixture=$(host_path /fixtures/network-addresses.txt)
         if [ -r "$network_address_fixture" ]; then
+            network_addresses_attempted=1
+            network_addresses_succeeded=1
             network_addresses=$(sed -n '1p' "$network_address_fixture")
             network_addresses_source='sanitized fixture'
         fi
     elif has_command ip; then
+        network_addresses_attempted=1
         if ip_address_output=$(ip -o addr show 2>/dev/null); then
+            network_addresses_succeeded=1
             network_addresses=$(printf '%s\n' "$ip_address_output" | awk '
             function escape(value) {
                 gsub(/%/, "%25", value); gsub(/;/, "%3B", value)
@@ -575,11 +587,15 @@ collect_network_addresses()
             }
             END { print output }
             ')
-            [ -z "$network_addresses" ] || network_addresses_source='ip -o addr show'
+            network_addresses_source='ip -o addr show'
+        else
+            network_addresses_failed=1
         fi
     fi
     if [ -z "$network_addresses" ] && [ "$FIXTURE_MODE" -eq 0 ] && has_command ifconfig; then
+        network_addresses_attempted=1
         if ifconfig_output=$(ifconfig -a 2>/dev/null); then
+            network_addresses_succeeded=1
             network_addresses=$(printf '%s\n' "$ifconfig_output" | awk '
             function escape(value) {
                 gsub(/%/, "%25", value); gsub(/;/, "%3B", value)
@@ -604,20 +620,30 @@ collect_network_addresses()
             }
             END { print output }
             ')
-            [ -z "$network_addresses" ] || network_addresses_source='ifconfig -a'
+            network_addresses_source='ifconfig -a'
+        else
+            network_addresses_failed=1
         fi
     fi
     if [ -z "$network_addresses" ] && [ "$FIXTURE_MODE" -eq 0 ] && has_command hostname; then
-        network_addresses=$(hostname -I 2>/dev/null | awk '{$1=$1; gsub(/ /, ","); print}')
-        [ -z "$network_addresses" ] ||
+        network_addresses_attempted=1
+        if hostname_address_output=$(hostname -I 2>/dev/null); then
+            network_addresses_succeeded=1
+            network_addresses=$(printf '%s\n' "$hostname_address_output" |
+                awk '{$1=$1; gsub(/ /, ","); print}')
             network_addresses_source='hostname -I (interfaces unavailable)'
+        else
+            network_addresses_failed=1
+        fi
     fi
 
     if [ -n "$network_addresses" ]; then
         emit_fact network.addresses "$network_addresses" ok \
             "$network_addresses_source" exact
-    elif [ -n "$network_addresses_source" ]; then
+    elif [ "$network_addresses_succeeded" -eq 1 ]; then
         emit_fact network.addresses '' unknown "$network_addresses_source" exact
+    elif [ "$network_addresses_attempted" -eq 1 ] && [ "$network_addresses_failed" -eq 1 ]; then
+        emit_fact network.addresses '' error 'ip/ifconfig/hostname' exact
     else
         emit_fact network.addresses '' missing 'ip/ifconfig/hostname' exact
     fi
@@ -900,7 +926,12 @@ collect_linux_default_route()
     route_source=/proc/net/route
     route_path=$(host_path "$route_source")
     route_data=
+    route_probe_attempted=0
+    route_probe_succeeded=0
+    route_probe_failed=0
     if [ -r "$route_path" ]; then
+        route_probe_attempted=1
+        route_probe_succeeded=1
         route_data=$(awk '
             function hex_digit(character) {
                 return index("0123456789ABCDEF", toupper(character)) - 1
@@ -922,16 +953,33 @@ collect_linux_default_route()
         ipv6_route_source=/proc/net/ipv6_route
         ipv6_route_path=$(host_path "$ipv6_route_source")
         if [ -r "$ipv6_route_path" ]; then
+            route_probe_attempted=1
+            route_probe_succeeded=1
             route_data=$(awk '
+                function hex_value(value, result, position, digit) {
+                    result=0
+                    for (position=1; position<=length(value); position++) {
+                        digit=index("0123456789ABCDEF", toupper(substr(value,position,1))) - 1
+                        if (digit < 0) return -1
+                        result=result * 16 + digit
+                    }
+                    return result
+                }
                 $1 == "00000000000000000000000000000000" && $2 == "00" {
+                    metric=hex_value($6)
+                    flags=hex_value($9)
+                    reject=int(flags / 512) % 2
+                    if (metric < 0 || metric == 4294967295 || reject == 1) next
+                    if (selected && metric >= selected_metric) next
                     gateway=$5
                     formatted=substr(gateway,1,4)
                     for (position=5; position<=32; position+=4) {
                         formatted=formatted ":" substr(gateway,position,4)
                     }
-                    print $10 "|" formatted
-                    exit
+                    selected=$10 "|" formatted
+                    selected_metric=metric
                 }
+                END { print selected }
             ' "$ipv6_route_path")
             [ -z "$route_data" ] || route_source=$ipv6_route_source
         fi
@@ -940,12 +988,18 @@ collect_linux_default_route()
     route_interface=
     route_gateway=
     if [ -z "$route_data" ] && has_command ip; then
-        route_data=$(ip route show default 2>/dev/null | sed -n '1p')
-        route_gateway=$(printf '%s\n' "$route_data" |
-            awk '{ for (i=1; i<=NF; i++) if ($i == "via") { print $(i+1); exit } }')
-        route_interface=$(printf '%s\n' "$route_data" |
-            awk '{ for (i=1; i<=NF; i++) if ($i == "dev") { print $(i+1); exit } }')
-        [ -z "$route_data" ] || route_source='ip route show default'
+        route_probe_attempted=1
+        if ip_route_output=$(ip route show default 2>/dev/null); then
+            route_probe_succeeded=1
+            route_data=$(printf '%s\n' "$ip_route_output" | sed -n '1p')
+            route_gateway=$(printf '%s\n' "$route_data" |
+                awk '{ for (i=1; i<=NF; i++) if ($i == "via") { print $(i+1); exit } }')
+            route_interface=$(printf '%s\n' "$route_data" |
+                awk '{ for (i=1; i<=NF; i++) if ($i == "dev") { print $(i+1); exit } }')
+            route_source='ip route show default'
+        else
+            route_probe_failed=1
+        fi
     fi
 
     if [ -n "$route_data" ]; then
@@ -956,10 +1010,14 @@ collect_linux_default_route()
         emit_fact network.default_route.exists true ok "$route_source" exact
         emit_detected network.default_route.interface "$route_interface" "$route_source" exact
         emit_detected network.default_route.gateway "$route_gateway" "$route_source" exact
-    elif [ -r "$route_path" ] || [ -r "${ipv6_route_path:-/nonexistent}" ] || has_command ip; then
+    elif [ "$route_probe_succeeded" -eq 1 ]; then
         emit_fact network.default_route.exists false ok "$route_source" exact
         emit_fact network.default_route.interface '' unknown "$route_source" exact
         emit_fact network.default_route.gateway '' unknown "$route_source" exact
+    elif [ "$route_probe_attempted" -eq 1 ] && [ "$route_probe_failed" -eq 1 ]; then
+        emit_fact network.default_route.exists '' error "$route_source/ip" exact
+        emit_fact network.default_route.interface '' error "$route_source/ip" exact
+        emit_fact network.default_route.gateway '' error "$route_source/ip" exact
     else
         emit_fact network.default_route.exists '' missing "$route_source/ip" exact
         emit_fact network.default_route.interface '' missing "$route_source/ip" exact
@@ -1057,7 +1115,7 @@ collect_macos_system()
     if has_command sysctl; then
         sysctl_value kern.boottime
         boot_epoch=$(printf '%s\n' "$SYSCTL_VALUE" |
-            sed -n 's/.*sec = \([0-9][0-9]*\).*/\1/p')
+            sed -n 's/.*{[[:space:]]*sec = \([0-9][0-9]*\).*/\1/p')
         now_epoch=$(date +%s 2>/dev/null || printf '')
         case "$boot_epoch:$now_epoch" in
             *[!0-9:]*|:*) mac_uptime= ;;
@@ -1072,8 +1130,11 @@ collect_macos_system()
 collect_macos_battery()
 {
     if has_command pmset; then
-        battery_output=$(pmset -g batt 2>/dev/null || printf '')
-        if printf '%s\n' "$battery_output" | grep -q 'InternalBattery'; then
+        if ! battery_output=$(pmset -g batt 2>/dev/null); then
+            emit_fact hardware.battery.present '' error 'pmset -g batt' exact
+            emit_fact hardware.battery.state '' error 'pmset -g batt' exact
+            emit_fact hardware.battery.charge_percent '' error 'pmset -g batt' exact
+        elif printf '%s\n' "$battery_output" | grep -q 'InternalBattery'; then
             battery_capacity=$(printf '%s\n' "$battery_output" |
                 sed -n 's/.*[[:space:]]\([0-9][0-9]*\)%;.*/\1/p' | sed -n '1p')
             battery_state=$(printf '%s\n' "$battery_output" |
@@ -1111,6 +1172,9 @@ collect_macos_network()
             interface_mac=$(printf '%s\n' "$interface_output" |
                 awk '$1 == "ether" { print $2; exit }')
             classify_interface "$interface_name" '' ''
+            case "$interface_name:$INTERFACE_CLASS" in
+                en*:wired) INTERFACE_CLASS=unknown ;;
+            esac
             interface_item="$(inventory_escape "$interface_name")|state=$(inventory_escape "$interface_state")|type=$INTERFACE_CLASS"
             [ -z "$interface_mac" ] || interface_item="$interface_item|mac=$(inventory_escape "$interface_mac")"
             if [ -n "$mac_interfaces" ]; then
@@ -1119,7 +1183,7 @@ collect_macos_network()
                 mac_interfaces=$interface_item
             fi
         done
-        emit_detected network.interfaces "$mac_interfaces" 'ifconfig -l/ifconfig' exact
+        emit_detected network.interfaces "$mac_interfaces" 'ifconfig -l/ifconfig' heuristic
     else
         emit_fact network.interfaces '' missing ifconfig exact
     fi
@@ -1133,20 +1197,25 @@ collect_macos_default_route()
 {
     if has_command route; then
         mac_route=$(route -n get default 2>/dev/null || printf '')
+        route_source='route -n get default'
+        if [ -z "$mac_route" ]; then
+            mac_route=$(route -n get -inet6 default 2>/dev/null || printf '')
+            route_source='route -n get -inet6 default'
+        fi
         route_gateway=$(printf '%s\n' "$mac_route" |
             awk '$1 == "gateway:" { print $2; exit }')
         route_interface=$(printf '%s\n' "$mac_route" |
             awk '$1 == "interface:" { print $2; exit }')
         if [ -n "$route_gateway$route_interface" ]; then
-            emit_fact network.default_route.exists true ok 'route -n get default' exact
+            emit_fact network.default_route.exists true ok "$route_source" exact
             emit_detected network.default_route.interface "$route_interface" \
-                'route -n get default' exact
+                "$route_source" exact
             emit_detected network.default_route.gateway "$route_gateway" \
-                'route -n get default' exact
+                "$route_source" exact
         else
-            emit_fact network.default_route.exists false ok 'route -n get default' exact
-            emit_fact network.default_route.interface '' unknown 'route -n get default' exact
-            emit_fact network.default_route.gateway '' unknown 'route -n get default' exact
+            emit_fact network.default_route.exists false ok "$route_source" exact
+            emit_fact network.default_route.interface '' unknown "$route_source" exact
+            emit_fact network.default_route.gateway '' unknown "$route_source" exact
         fi
     else
         emit_fact network.default_route.exists '' missing route exact

@@ -113,6 +113,60 @@ for adapter in macos bsd unknown; do
     cmp "$repository_root/schema/fields-v1.txt" "$test_directory/$adapter-fields.txt" >/dev/null ||
         fail "$adapter adapter field order differs from the canonical manifest"
 done
+jq -e '
+    (.facts[] | select(.key == "system.os.family") |
+        .value == "macos" and .status == "ok") and
+    (.facts[] | select(.key == "hardware.manufacturer") |
+        .value == "Apple Inc." and .status == "ok") and
+    (.facts[] | select(.key == "hardware.firmware.vendor") |
+        .value == "Apple" and .status == "ok")
+' "$test_directory/macos.json" >/dev/null ||
+    fail 'macOS adapter fixture semantics are incorrect'
+
+ipv6_fixture=$test_directory/linux-ipv6
+cp -R "$fixture_root" "$ipv6_fixture"
+printf '%s\n' 'Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT' \
+    >"$ipv6_fixture/proc/net/route"
+printf '%s\n' \
+    '00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200 lo' \
+    '00000000000000000000000000000000 00 00000000000000000000000000000000 00 20010db8000000000000000000000001 00000064 00000000 00000000 00000003 eth0' \
+    >"$ipv6_fixture/proc/net/ipv6_route"
+SWISS_FIXTURE_ROOT=$ipv6_fixture run_collector --json >"$test_directory/ipv6.json" ||
+    fail 'IPv6-only route fixture collection failed'
+jq -e '
+    (.facts[] | select(.key == "network.default_route.exists") | .value == "true") and
+    (.facts[] | select(.key == "network.default_route.interface") | .value == "eth0") and
+    (.facts[] | select(.key == "network.default_route.gateway") |
+        .value == "2001:0db8:0000:0000:0000:0000:0000:0001")
+' "$test_directory/ipv6.json" >/dev/null ||
+    fail 'IPv6 reject sentinel was selected instead of the usable default route'
+
+if command -v busybox >/dev/null 2>&1; then
+    busybox_fixture=$test_directory/linux-busybox-df
+    busybox_bin=$test_directory/busybox-bin
+    cp -R "$fixture_root" "$busybox_fixture"
+    rm -f "$busybox_fixture/fixtures/filesystems.txt"
+    printf '%s\n' \
+        '/dev/root / ext4 rw,relatime 0 0' \
+        'server:/share /remote nfs rw,relatime 0 0' \
+        'rclone remote: /cloud fuse.rclone rw,relatime 0 0' \
+        >"$busybox_fixture/proc/mounts"
+    mkdir -p "$busybox_bin"
+    busybox --install -s "$busybox_bin"
+    PATH=$busybox_bin SWISS_FIXTURE_ROOT=$busybox_fixture \
+        SWISS_TEST_ALLOW_COMMAND=df "$busybox_bin/sh" "$repository_root/swiss.sh" --json \
+        >"$test_directory/busybox-df.json" ||
+        fail 'BusyBox-only filesystem fallback collection failed'
+    jq -e '
+        .facts[] | select(.key == "hardware.filesystems") |
+        .status == "ok" and
+        .source == "df -Pk for local /proc/mounts entries" and
+        (.value | contains("/|total=")) and
+        (.value | contains("/remote") | not) and
+        (.value | contains("/cloud") | not)
+    ' "$test_directory/busybox-df.json" >/dev/null ||
+        fail 'BusyBox fallback did not restrict df to allowlisted local filesystems'
+fi
 
 if run_collector --plain --json >"$test_directory/conflict.out" 2>"$test_directory/conflict.err"; then
     fail 'mutually exclusive output options succeeded'

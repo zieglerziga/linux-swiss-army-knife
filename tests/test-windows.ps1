@@ -16,6 +16,13 @@ function Assert-True {
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $collectorPath = Join-Path $repositoryRoot 'swiss.ps1'
 $fieldPath = Join-Path $repositoryRoot 'schema/fields-v1.txt'
+$sourcePolicyPath = Join-Path $PSScriptRoot 'test-powershell-source-policy.ps1'
+& $sourcePolicyPath
+$previousTestNow = $env:SWISS_TEST_NOW
+$env:SWISS_TEST_NOW = [DateTime]::UtcNow.ToString(
+    'yyyy-MM-ddTHH:mm:ssZ',
+    [Globalization.CultureInfo]::InvariantCulture
+)
 Assert-True (Test-Path -LiteralPath $collectorPath -PathType Leaf) `
     'swiss.ps1 is missing'
 
@@ -55,6 +62,25 @@ if ($env:OS -eq 'Windows_NT') {
     $family = $report.facts | Where-Object key -eq 'system.os.family'
     Assert-True ($family.value -eq 'windows' -and $family.status -eq 'ok') `
         'Windows OS family probe failed'
+    foreach ($requiredKey in @(
+        'system.os.product',
+        'system.os.version',
+        'system.os.build',
+        'hardware.cpu.model',
+        'hardware.cpu.logical_count',
+        'hardware.memory.total_bytes',
+        'network.hostname',
+        'network.interfaces'
+    )) {
+        $fact = $report.facts | Where-Object key -eq $requiredKey
+        Assert-True ($fact.status -eq 'ok' -and
+            -not [string]::IsNullOrWhiteSpace($fact.value)) `
+            ('native Windows probe is not usable: {0}' -f $requiredKey)
+    }
+    $logicalCount = $report.facts | Where-Object key -eq 'hardware.cpu.logical_count'
+    $memorySize = $report.facts | Where-Object key -eq 'hardware.memory.total_bytes'
+    Assert-True ([uint64] $logicalCount.value -gt 0) 'logical CPU count is not positive'
+    Assert-True ([uint64] $memorySize.value -gt 0) 'memory size is not positive'
 }
 else {
     Assert-True ($report.collector.platform -eq 'unknown') `
@@ -84,17 +110,44 @@ else {
 
 $plainLines = @(& $collectorPath --plain)
 Assert-True ($plainLines.Count -eq 42) 'plain output does not contain 42 lines'
-foreach ($line in $plainLines) {
+$expectedPlainLines = @($report.facts | ForEach-Object {
+    $factValue = if ($_.key -eq 'collector.timestamp') {
+        $env:SWISS_TEST_NOW
+    }
+    else {
+        [string] $_.value
+    }
+    "{0}`t{1}`t{2}`t{3}" -f $_.key, $_.status, $_.confidence, $factValue
+})
+for ($index = 0; $index -lt $plainLines.Count; $index++) {
+    $line = $plainLines[$index]
     Assert-True (($line -split "`t").Count -eq 4) 'plain output is not four columns'
+    Assert-True ($line -eq $expectedPlainLines[$index]) `
+        ('plain output differs from JSON semantics at index {0}' -f $index)
 }
 $debugLines = @(& $collectorPath --plain --debug)
 Assert-True ($debugLines.Count -eq 42) 'debug output does not contain 42 lines'
-foreach ($line in $debugLines) {
+$expectedDebugLines = @($report.facts | ForEach-Object {
+    $factValue = if ($_.key -eq 'collector.timestamp') {
+        $env:SWISS_TEST_NOW
+    }
+    else {
+        [string] $_.value
+    }
+    "{0}`t{1}`t{2}`t{3}`t{4}" -f `
+        $_.key, $_.status, $_.confidence, $factValue, $_.source
+})
+for ($index = 0; $index -lt $debugLines.Count; $index++) {
+    $line = $debugLines[$index]
     Assert-True (($line -split "`t").Count -eq 5) 'debug output is not five columns'
+    Assert-True ($line -eq $expectedDebugLines[$index]) `
+        ('debug output differs from JSON semantics at index {0}' -f $index)
 }
 
 $fullReport = (& $collectorPath --json --full | Out-String) | ConvertFrom-Json
 Assert-True ($fullReport.collector.mode -eq 'full') '--full mode was not recorded'
+
+$env:SWISS_TEST_NOW = $previousTestNow
 
 Write-Output ('Windows collector tests passed under PowerShell {0}.' -f `
     $PSVersionTable.PSVersion)

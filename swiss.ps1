@@ -167,7 +167,15 @@ function Get-CimStatus {
 $fixtureMode = $env:SWISS_FIXTURE_MODE -eq '1'
 $isWindowsHost = $env:OS -eq 'Windows_NT' -or $env:SWISS_TEST_WINDOWS -eq '1'
 $platformAdapter = if ($isWindowsHost) { 'windows' } else { 'unknown' }
-$collectionTimestamp = [DateTime]::UtcNow.ToString(
+$collectionNow = [DateTime]::UtcNow
+if (-not [string]::IsNullOrWhiteSpace($env:SWISS_TEST_NOW)) {
+    $collectionNow = [DateTime]::Parse(
+        $env:SWISS_TEST_NOW,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal
+    ).ToUniversalTime()
+}
+$collectionTimestamp = $collectionNow.ToString(
     'yyyy-MM-ddTHH:mm:ssZ',
     [Globalization.CultureInfo]::InvariantCulture
 )
@@ -333,7 +341,7 @@ else {
     if ($null -ne $osInfo -and $null -ne $osInfo.LastBootUpTime) {
         try {
             $bootTimeUtc = ([DateTime] $osInfo.LastBootUpTime).ToUniversalTime()
-            $uptimeSeconds = [Math]::Floor(([DateTime]::UtcNow - $bootTimeUtc).TotalSeconds)
+            $uptimeSeconds = [Math]::Floor(($collectionNow - $bootTimeUtc).TotalSeconds)
             Add-Fact system.uptime_seconds ([string] $uptimeSeconds) ok `
                 'CIM Win32_OperatingSystem.LastBootUpTime' derived
         }
@@ -384,13 +392,25 @@ else {
 
     if ($null -ne $processorInfo) {
         Add-DetectedFact hardware.cpu.model $processorInfo.Name 'CIM Win32_Processor.Name'
-        Add-DetectedFact hardware.cpu.logical_count $processorInfo.NumberOfLogicalProcessors `
-            'CIM Win32_Processor.NumberOfLogicalProcessors'
     }
     else {
         $coreStatus = Get-CimStatus $cimAvailable $coreCimFailed
         Add-Fact hardware.cpu.model '' $coreStatus 'CIM Win32_Processor' exact
-        Add-Fact hardware.cpu.logical_count '' $coreStatus 'CIM Win32_Processor' exact
+    }
+    if ($null -ne $computerInfo -and
+        $null -ne $computerInfo.NumberOfLogicalProcessors) {
+        Add-DetectedFact hardware.cpu.logical_count `
+            $computerInfo.NumberOfLogicalProcessors `
+            'CIM Win32_ComputerSystem.NumberOfLogicalProcessors'
+    }
+    elseif ($null -ne $processorInfo) {
+        Add-DetectedFact hardware.cpu.logical_count `
+            $processorInfo.NumberOfLogicalProcessors `
+            'CIM Win32_Processor.NumberOfLogicalProcessors (fallback)'
+    }
+    else {
+        $coreStatus = Get-CimStatus $cimAvailable $coreCimFailed
+        Add-Fact hardware.cpu.logical_count '' $coreStatus 'CIM logical processor count' exact
     }
 
     if ($null -ne $osInfo -and $null -ne $osInfo.TotalVisibleMemorySize) {
@@ -493,6 +513,10 @@ else {
     $dnsValues = New-Object 'System.Collections.Generic.List[string]'
     $routeInterface = ''
     $routeGateway = ''
+    $routeSource = 'Windows route providers'
+    $routeProbeAvailable = $false
+    $routeProbeSucceeded = $false
+    $routeProbeFailed = $false
     $networkSource = 'Windows networking cmdlets'
     $networkFailed = $false
     $modernNetworkAvailable = (Get-CommandAvailable 'Get-NetAdapter') -and
@@ -516,14 +540,6 @@ else {
                     (Convert-ToInventoryText $address.IPAddress), $address.PrefixLength))
             }
 
-            if (Get-CommandAvailable 'Get-NetRoute') {
-                $defaultRoute = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' |
-                    Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1)
-                if ($defaultRoute.Count -gt 0) {
-                    $routeInterface = [string] $defaultRoute[0].InterfaceAlias
-                    $routeGateway = [string] $defaultRoute[0].NextHop
-                }
-            }
             if (Get-CommandAvailable 'Get-DnsClientServerAddress') {
                 foreach ($dnsEntry in @(Get-DnsClientServerAddress)) {
                     foreach ($serverAddress in @($dnsEntry.ServerAddresses)) {
@@ -538,9 +554,31 @@ else {
         catch {
             $networkFailed = $true
         }
+
+        if (Get-CommandAvailable 'Get-NetRoute') {
+            $routeProbeAvailable = $true
+            $routeSource = 'Get-NetRoute IPv4/IPv6 default'
+            try {
+                $defaultRoutes = @()
+                $defaultRoutes += @(Get-NetRoute -DestinationPrefix '0.0.0.0/0')
+                $defaultRoutes += @(Get-NetRoute -DestinationPrefix '::/0')
+                $defaultRoute = @($defaultRoutes |
+                    Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1)
+                $routeProbeSucceeded = $true
+                if ($defaultRoute.Count -gt 0) {
+                    $routeInterface = [string] $defaultRoute[0].InterfaceAlias
+                    $routeGateway = [string] $defaultRoute[0].NextHop
+                }
+            }
+            catch {
+                $routeProbeFailed = $true
+            }
+        }
     }
     elseif ($cimAvailable) {
         $networkSource = 'CIM Win32_NetworkAdapterConfiguration'
+        $routeSource = $networkSource
+        $routeProbeAvailable = $true
         try {
             $networkConfigurations = @(
                 Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration `
@@ -571,9 +609,35 @@ else {
                     }
                 }
             }
+            $routeProbeSucceeded = $true
         }
         catch {
             $networkFailed = $true
+            $routeProbeFailed = $true
+        }
+    }
+
+    if (-not $routeProbeSucceeded -and $modernNetworkAvailable -and $cimAvailable) {
+        $routeProbeAvailable = $true
+        $routeSource = 'CIM Win32_NetworkAdapterConfiguration default gateway fallback'
+        try {
+            $routeConfigurations = @(
+                Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration `
+                    -Filter 'IPEnabled=True'
+            )
+            foreach ($configuration in $routeConfigurations) {
+                foreach ($gateway in @($configuration.DefaultIPGateway)) {
+                    if ([string]::IsNullOrWhiteSpace($routeGateway)) {
+                        $routeGateway = [string] $gateway
+                        $routeInterface = [string] $configuration.Description
+                    }
+                }
+            }
+            $routeProbeSucceeded = $true
+            $routeProbeFailed = $false
+        }
+        catch {
+            $routeProbeFailed = $true
         }
     }
 
@@ -599,19 +663,24 @@ else {
         Add-Fact network.addresses '' $networkStatus $networkSource exact
     }
     if (-not [string]::IsNullOrWhiteSpace($routeGateway + $routeInterface)) {
-        Add-Fact network.default_route.exists true ok $networkSource exact
-        Add-DetectedFact network.default_route.interface $routeInterface $networkSource
-        Add-DetectedFact network.default_route.gateway $routeGateway $networkSource
+        Add-Fact network.default_route.exists true ok $routeSource exact
+        Add-DetectedFact network.default_route.interface $routeInterface $routeSource
+        Add-DetectedFact network.default_route.gateway $routeGateway $routeSource
     }
-    elseif (-not $networkFailed -and ($modernNetworkAvailable -or $cimAvailable)) {
-        Add-Fact network.default_route.exists false ok $networkSource exact
-        Add-Fact network.default_route.interface '' unknown $networkSource exact
-        Add-Fact network.default_route.gateway '' unknown $networkSource exact
+    elseif ($routeProbeSucceeded) {
+        Add-Fact network.default_route.exists false ok $routeSource exact
+        Add-Fact network.default_route.interface '' unknown $routeSource exact
+        Add-Fact network.default_route.gateway '' unknown $routeSource exact
+    }
+    elseif ($routeProbeAvailable -and $routeProbeFailed) {
+        Add-Fact network.default_route.exists '' error $routeSource exact
+        Add-Fact network.default_route.interface '' error $routeSource exact
+        Add-Fact network.default_route.gateway '' error $routeSource exact
     }
     else {
-        Add-Fact network.default_route.exists '' $networkStatus $networkSource exact
-        Add-Fact network.default_route.interface '' $networkStatus $networkSource exact
-        Add-Fact network.default_route.gateway '' $networkStatus $networkSource exact
+        Add-Fact network.default_route.exists '' missing $routeSource exact
+        Add-Fact network.default_route.interface '' missing $routeSource exact
+        Add-Fact network.default_route.gateway '' missing $routeSource exact
     }
     if ($dnsValues.Count -gt 0) {
         Add-Fact network.dns.resolvers ($dnsValues -join ',') ok $networkSource exact

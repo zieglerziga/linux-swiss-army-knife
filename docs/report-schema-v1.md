@@ -40,5 +40,11 @@ component identifies the object and subsequent pipe-separated components use
 eth0|state=up|type=wired|mac=00:00:00:00:00:00
 ```
 
+Within every inventory component, reserved delimiters are percent-encoded in
+this order: `%` becomes `%25`, `;` becomes `%3B`, `|` becomes `%7C`, and `=`
+becomes `%3D`. Consumers decode those four sequences after splitting records
+on `;`, components on `|`, and component names from values on the first `=`.
+The encoding is textual and case-sensitive; no other URL-decoding is implied.
+
 This representation is intentionally conservative for the first schema. A
 future schema may add typed inventories without changing version 1.
