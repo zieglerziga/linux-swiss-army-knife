@@ -62,58 +62,271 @@ function Read-FixtureLine {
     return $line.TrimEnd([char[]] @(13, 10))
 }
 
-function Convert-FixtureResult {
-    param([string] $Line)
+function New-HealthResult {
+    param(
+        [string] $Name,
+        [string] $Status,
+        [string] $Detail
+    )
+    return [pscustomobject] @{ Name = $Name; Status = $Status; Detail = $Detail }
+}
 
-    $columns = $Line -split "`t", 2
+function Get-FixtureResult {
+    param(
+        [string] $Name,
+        [string] $FileName
+    )
+
+    $line = Read-FixtureLine $FileName
+    $columns = $line -split "`t", 2
     if ($columns.Count -ne 2) {
-        throw 'fixture result must contain status and detail separated by a tab'
+        throw ('{0} must contain status and detail separated by a tab' -f $FileName)
     }
     $status = $columns[0].ToLowerInvariant()
     if ($status -notin @('pass', 'warn', 'unsupported', 'fail', 'error')) {
         throw ('invalid fixture status: {0}' -f $columns[0])
     }
-    return @($status, $columns[1])
+    return (New-HealthResult -Name $Name -Status $status -Detail $columns[1])
 }
 
-function Add-Result {
+function Get-DiskSamples {
+    # Fixtures and Windows disks use the same small record shape.
+    $samples = New-Object 'System.Collections.Generic.List[object]'
+
+    if (-not [string]::IsNullOrWhiteSpace($env:HEALTH_FIXTURE_ROOT)) {
+        $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-disks.tsv'
+        if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+            throw 'fixture is missing: windows-disks.tsv'
+        }
+
+        foreach ($line in Get-Content -LiteralPath $fixturePath) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $columns = $line -split "`t", 3
+            if ($columns.Count -ne 3) { throw 'invalid windows-disks.tsv row' }
+
+            if ($columns[1] -eq 'missing' -or $columns[2] -eq 'missing') {
+                $samples.Add([pscustomobject] @{
+                    Name = $columns[0]
+                    Size = 0.0
+                    Free = 0.0
+                    Readable = $false
+                })
+                continue
+            }
+            if ($columns[1] -notmatch '^\d+(?:\.\d+)?$' -or
+                $columns[2] -notmatch '^\d+(?:\.\d+)?$') {
+                throw 'invalid windows-disks.tsv row'
+            }
+
+            $size = [double]::Parse($columns[1], [Globalization.CultureInfo]::InvariantCulture)
+            $free = [double]::Parse($columns[2], [Globalization.CultureInfo]::InvariantCulture)
+            if ($size -le 0 -or $free -lt 0 -or $free -gt $size) {
+                throw 'invalid disk size or free space in fixture'
+            }
+            $samples.Add([pscustomobject] @{
+                Name = $columns[0]
+                Size = $size
+                Free = $free
+                Readable = $true
+            })
+        }
+        return $samples.ToArray()
+    }
+
+    $fixedDisks = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType = 3')
+    foreach ($disk in $fixedDisks) {
+        $diskName = [string] $disk.DeviceID
+        if ([string]::IsNullOrWhiteSpace($diskName)) { $diskName = '<unknown>' }
+
+        if ($null -eq $disk.Size -or $null -eq $disk.FreeSpace) {
+            $samples.Add([pscustomobject] @{
+                Name = $diskName
+                Size = 0.0
+                Free = 0.0
+                Readable = $false
+            })
+            continue
+        }
+
+        $size = [double] $disk.Size
+        $free = [double] $disk.FreeSpace
+        if ($size -le 0 -or $free -lt 0 -or $free -gt $size) {
+            $samples.Add([pscustomobject] @{
+                Name = $diskName
+                Size = 0.0
+                Free = 0.0
+                Readable = $false
+            })
+            continue
+        }
+        $samples.Add([pscustomobject] @{
+            Name = $diskName
+            Size = $size
+            Free = $free
+            Readable = $true
+        })
+    }
+    return $samples.ToArray()
+}
+
+function Get-ProcessSamples {
+    $samples = New-Object 'System.Collections.Generic.List[object]'
+
+    if (-not [string]::IsNullOrWhiteSpace($env:HEALTH_FIXTURE_ROOT)) {
+        $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-processes.tsv'
+        if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+            throw 'fixture is missing: windows-processes.tsv'
+        }
+
+        foreach ($line in Get-Content -LiteralPath $fixturePath) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $columns = $line -split "`t", 3
+            if ($columns.Count -ne 3 -or $columns[2] -notmatch '^(?i:true|false|1|0)$') {
+                throw 'invalid windows-processes.tsv row'
+            }
+            $responding = $columns[2] -match '^(?i:true|1)$'
+            $samples.Add([pscustomobject] @{
+                Name = $columns[1]
+                Id = $columns[0]
+                Responding = $responding
+            })
+        }
+        return $samples.ToArray()
+    }
+
+    foreach ($process in Get-Process) {
+        if ($process.MainWindowHandle -ne 0) {
+            $samples.Add([pscustomobject] @{
+                Name = $process.ProcessName
+                Id = $process.Id
+                Responding = [bool] $process.Responding
+            })
+        }
+    }
+    return $samples.ToArray()
+}
+
+function Get-SudoResult {
+    if (-not [string]::IsNullOrWhiteSpace($env:HEALTH_FIXTURE_ROOT)) {
+        return (Get-FixtureResult -Name 'sudo' -FileName 'sudo-result.tsv')
+    }
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        return (New-HealthResult -Name 'sudo' -Status 'pass' `
+            -Detail 'PowerShell is running elevated')
+    }
+    if (Get-Command -Name sudo -ErrorAction SilentlyContinue) {
+        return (New-HealthResult -Name 'sudo' -Status 'warn' `
+            -Detail 'sudo is available, but non-interactive elevation was not attempted')
+    }
+    return (New-HealthResult -Name 'sudo' -Status 'warn' `
+        -Detail 'session is not elevated and sudo is unavailable')
+}
+
+function Get-DiskResult {
+    param([int] $DiskWarning)
+
+    $diskSamples = @(Get-DiskSamples)
+    $lowDisks = New-Object 'System.Collections.Generic.List[string]'
+    $unreadableDisks = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($disk in $diskSamples) {
+        if (-not $disk.Readable) {
+            $unreadableDisks.Add($disk.Name)
+            continue
+        }
+
+        $usedPercent = 100.0 * ($disk.Size - $disk.Free) / $disk.Size
+        if ($usedPercent -ge $DiskWarning) {
+            $formattedPercent = $usedPercent.ToString(
+                'N1', [Globalization.CultureInfo]::InvariantCulture
+            )
+            $lowDisks.Add(('{0} {1}% used' -f $disk.Name, $formattedPercent))
+        }
+    }
+
+    if ($diskSamples.Count -eq 0) {
+        return (New-HealthResult -Name 'disk' -Status 'unsupported' `
+            -Detail 'no fixed disks were found')
+    }
+    if ($lowDisks.Count -gt 0) {
+        $detail = $lowDisks -join '; '
+        if ($unreadableDisks.Count -gt 0) {
+            $detail += '; scan incomplete: unreadable capacity data for ' +
+                ($unreadableDisks -join ', ')
+        }
+        return (New-HealthResult -Name 'disk' -Status 'warn' -Detail $detail)
+    }
+    if ($unreadableDisks.Count -gt 0) {
+        $detail = 'disk scan incomplete: unreadable capacity data for ' +
+            ($unreadableDisks -join ', ')
+        return (New-HealthResult -Name 'disk' -Status 'unsupported' -Detail $detail)
+    }
+
+    $detail = 'all fixed disks are below {0}% used' -f $DiskWarning
+    return (New-HealthResult -Name 'disk' -Status 'pass' -Detail $detail)
+}
+
+function Get-ProcessResult {
+    $processSamples = @(Get-ProcessSamples)
+    $unresponsiveProcesses = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($process in $processSamples) {
+        if (-not $process.Responding) {
+            $unresponsiveProcesses.Add(('{0} (PID {1})' -f $process.Name, $process.Id))
+        }
+    }
+
+    if ($unresponsiveProcesses.Count -eq 0) {
+        return (New-HealthResult -Name 'processes' -Status 'pass' `
+            -Detail 'no unresponsive GUI processes found')
+    }
+    $detail = 'unresponsive GUI processes: ' + ($unresponsiveProcesses -join ', ')
+    return (New-HealthResult -Name 'processes' -Status 'warn' -Detail $detail)
+}
+
+function Get-UpdatesResult {
+    if (-not [string]::IsNullOrWhiteSpace($env:HEALTH_FIXTURE_ROOT)) {
+        return (Get-FixtureResult -Name 'updates' -FileName 'updates-result.tsv')
+    }
+
+    try {
+        $session = New-Object -ComObject Microsoft.Update.Session
+        $searcher = $session.CreateUpdateSearcher()
+        $searchResult = $searcher.Search("IsInstalled=0 and IsHidden=0")
+        if ($searchResult.Updates.Count -eq 0) {
+            return (New-HealthResult -Name 'updates' -Status 'pass' `
+                -Detail 'no applicable updates are pending')
+        }
+        $detail = '{0} applicable update(s) are pending' -f $searchResult.Updates.Count
+        return (New-HealthResult -Name 'updates' -Status 'warn' -Detail $detail)
+    }
+    catch {
+        $detail = 'Windows Update search is unavailable: ' + $_.Exception.Message
+        return (New-HealthResult -Name 'updates' -Status 'unsupported' -Detail $detail)
+    }
+}
+
+function Invoke-HealthCheck {
     param(
-        [System.Collections.Generic.List[object]] $Results,
         [string] $Name,
-        [string] $Status,
-        [string] $Detail
-    )
-    $Results.Add([pscustomobject] @{ Name = $Name; Status = $Status; Detail = $Detail })
-}
-
-function Add-DiskResult {
-    param(
-        [System.Collections.Generic.List[object]] $Results,
-        [System.Collections.Generic.List[string]] $LowDisks,
-        [System.Collections.Generic.List[string]] $UnreadableDisks,
-        [int] $FixedDiskCount,
         [int] $DiskWarning
     )
 
-    if ($FixedDiskCount -eq 0) {
-        Add-Result $Results 'disk' 'unsupported' 'no fixed disks were found'
-    }
-    elseif ($LowDisks.Count -gt 0) {
-        $detail = $LowDisks -join '; '
-        if ($UnreadableDisks.Count -gt 0) {
-            $detail += '; scan incomplete: unreadable capacity data for ' +
-                ($UnreadableDisks -join ', ')
+    try {
+        switch ($Name) {
+            'sudo' { return (Get-SudoResult) }
+            'disk' { return (Get-DiskResult -DiskWarning $DiskWarning) }
+            'processes' { return (Get-ProcessResult) }
+            'updates' { return (Get-UpdatesResult) }
+            default { throw ('unknown check: {0}' -f $Name) }
         }
-        Add-Result $Results 'disk' 'warn' $detail
     }
-    elseif ($UnreadableDisks.Count -gt 0) {
-        Add-Result $Results 'disk' 'unsupported' `
-            ('disk scan incomplete: unreadable capacity data for ' +
-                ($UnreadableDisks -join ', '))
-    }
-    else {
-        Add-Result $Results 'disk' 'pass' `
-            ('all fixed disks are below {0}% used' -f $DiskWarning)
+    catch {
+        return (New-HealthResult -Name $Name -Status 'error' `
+            -Detail $_.Exception.Message)
     }
 }
 
@@ -127,13 +340,15 @@ function Invoke-Remote {
 
     $scriptPath = Join-Path $PSScriptRoot 'health-check.sh'
     if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
-        Write-Check -Name remote -Status error -Detail 'sibling health-check.sh is missing' -Plain $script:Plain
+        Write-Check -Name remote -Status error `
+            -Detail 'sibling health-check.sh is missing' -Plain $script:Plain
         return 2
     }
     $sshCommand = Get-Command -Name ssh -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($null -eq $sshCommand) {
-        Write-Check -Name remote -Status unsupported -Detail 'ssh is unavailable' -Plain $script:Plain
+        Write-Check -Name remote -Status unsupported `
+            -Detail 'ssh is unavailable' -Plain $script:Plain
         return 1
     }
 
@@ -266,7 +481,8 @@ if ($all) {
 }
 $selected = @($selected | Select-Object -Unique)
 if ($selected.Count -eq 0) {
-    Write-Output 'Error: select at least one check with --sudo, --disk, --processes, --updates, or --all'
+    Write-Output ('Error: select at least one check with --sudo, --disk, ' +
+        '--processes, --updates, or --all')
     Write-Usage
     exit 2
 }
@@ -277,135 +493,14 @@ if (-not [string]::IsNullOrEmpty($remote)) {
     if ($all -and $selected.Count -eq 4) { $forwardArguments = @('--all') }
     if ($plain) { $forwardArguments += '--plain' }
     if ($diskWarning -ne 85) { $forwardArguments += @('--disk-warning', [string] $diskWarning) }
-    exit (Invoke-Remote -Remote $remote -Identity $identity -ConnectTimeout $connectTimeout -ForwardArguments $forwardArguments)
+    $remoteExitCode = Invoke-Remote -Remote $remote -Identity $identity `
+        -ConnectTimeout $connectTimeout -ForwardArguments $forwardArguments
+    exit $remoteExitCode
 }
 
-$results = New-Object 'System.Collections.Generic.List[object]'
+$results = @()
 foreach ($check in $selected) {
-    try {
-        if (-not [string]::IsNullOrWhiteSpace($env:HEALTH_FIXTURE_ROOT)) {
-            switch ($check) {
-                'sudo' {
-                    $fixture = Convert-FixtureResult (Read-FixtureLine 'sudo-result.tsv')
-                    Add-Result $results 'sudo' $fixture[0] $fixture[1]
-                }
-                'disk' {
-                    $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-disks.tsv'
-                    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { throw 'fixture is missing: windows-disks.tsv' }
-                    $lowDisks = New-Object 'System.Collections.Generic.List[string]'
-                    $unreadableDisks = New-Object 'System.Collections.Generic.List[string]'
-                    $fixedDiskCount = 0
-                    foreach ($line in Get-Content -LiteralPath $fixturePath) {
-                        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-                        $columns = $line -split "`t", 3
-                        if ($columns.Count -ne 3) { throw 'invalid windows-disks.tsv row' }
-                        $fixedDiskCount++
-                        if ($columns[1] -eq 'missing' -or $columns[2] -eq 'missing') {
-                            $unreadableDisks.Add($columns[0])
-                            continue
-                        }
-                        if ($columns[1] -notmatch '^\d+(?:\.\d+)?$' -or
-                            $columns[2] -notmatch '^\d+(?:\.\d+)?$') {
-                            throw 'invalid windows-disks.tsv row'
-                        }
-                        $size = [double]::Parse($columns[1], [Globalization.CultureInfo]::InvariantCulture)
-                        $free = [double]::Parse($columns[2], [Globalization.CultureInfo]::InvariantCulture)
-                        if ($size -le 0 -or $free -lt 0 -or $free -gt $size) { throw 'invalid disk size or free space in fixture' }
-                        $usedPercent = 100.0 * ($size - $free) / $size
-                        if ($usedPercent -ge $diskWarning) {
-                            $lowDisks.Add(('{0} {1}% used' -f $columns[0],
-                                $usedPercent.ToString('N1', [Globalization.CultureInfo]::InvariantCulture)))
-                        }
-                    }
-                    Add-DiskResult $results $lowDisks $unreadableDisks `
-                        $fixedDiskCount $diskWarning
-                }
-                'processes' {
-                    $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-processes.tsv'
-                    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { throw 'fixture is missing: windows-processes.tsv' }
-                    $hung = New-Object 'System.Collections.Generic.List[string]'
-                    foreach ($line in Get-Content -LiteralPath $fixturePath) {
-                        if ([string]::IsNullOrWhiteSpace($line)) { continue }
-                        $columns = $line -split "`t", 3
-                        if ($columns.Count -ne 3 -or $columns[2] -notmatch '^(?i:true|false|1|0)$') { throw 'invalid windows-processes.tsv row' }
-                        if ($columns[2] -match '^(?i:false|0)$') { $hung.Add(('{0} (PID {1})' -f $columns[1], $columns[0])) }
-                    }
-                    if ($hung.Count -eq 0) { Add-Result $results 'processes' 'pass' 'no unresponsive GUI processes found' }
-                    else { Add-Result $results 'processes' 'warn' ('unresponsive GUI processes: ' + ($hung -join ', ')) }
-                }
-                'updates' {
-                    $fixture = Convert-FixtureResult (Read-FixtureLine 'updates-result.tsv')
-                    Add-Result $results 'updates' $fixture[0] $fixture[1]
-                }
-            }
-            continue
-        }
-
-        switch ($check) {
-            'sudo' {
-                $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-                $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-                if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-                    Add-Result $results 'sudo' 'pass' 'PowerShell is running elevated'
-                }
-                elseif (Get-Command -Name sudo -ErrorAction SilentlyContinue) {
-                    Add-Result $results 'sudo' 'warn' `
-                        'sudo is available, but non-interactive elevation was not attempted'
-                }
-                else {
-                    Add-Result $results 'sudo' 'warn' 'session is not elevated and sudo is unavailable'
-                }
-            }
-            'disk' {
-                $lowDisks = New-Object 'System.Collections.Generic.List[string]'
-                $unreadableDisks = New-Object 'System.Collections.Generic.List[string]'
-                $fixedDisks = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType = 3')
-                foreach ($disk in $fixedDisks) {
-                    $diskName = [string] $disk.DeviceID
-                    if ([string]::IsNullOrWhiteSpace($diskName)) { $diskName = '<unknown>' }
-                    $diskSize = [double] $disk.Size
-                    $diskFree = [double] $disk.FreeSpace
-                    if ($null -eq $disk.Size -or $null -eq $disk.FreeSpace -or
-                        $diskSize -le 0 -or $diskFree -lt 0 -or $diskFree -gt $diskSize) {
-                        $unreadableDisks.Add($diskName)
-                        continue
-                    }
-                    $usedPercent = 100.0 * ($diskSize - $diskFree) / $diskSize
-                    if ($usedPercent -ge $diskWarning) {
-                        $lowDisks.Add(('{0} {1}% used' -f $diskName,
-                            $usedPercent.ToString('N1', [Globalization.CultureInfo]::InvariantCulture)))
-                    }
-                }
-                Add-DiskResult $results $lowDisks $unreadableDisks `
-                    $fixedDisks.Count $diskWarning
-            }
-            'processes' {
-                $hung = New-Object 'System.Collections.Generic.List[string]'
-                foreach ($process in Get-Process) {
-                    if ($process.MainWindowHandle -ne 0 -and -not $process.Responding) {
-                        $hung.Add(('{0} (PID {1})' -f $process.ProcessName, $process.Id))
-                    }
-                }
-                if ($hung.Count -eq 0) { Add-Result $results 'processes' 'pass' 'no unresponsive GUI processes found' }
-                else { Add-Result $results 'processes' 'warn' ('unresponsive GUI processes: ' + ($hung -join ', ')) }
-            }
-            'updates' {
-                try {
-                    $session = New-Object -ComObject Microsoft.Update.Session
-                    $searcher = $session.CreateUpdateSearcher()
-                    $searchResult = $searcher.Search("IsInstalled=0 and IsHidden=0")
-                    if ($searchResult.Updates.Count -eq 0) { Add-Result $results 'updates' 'pass' 'no applicable updates are pending' }
-                    else { Add-Result $results 'updates' 'warn' ('{0} applicable update(s) are pending' -f $searchResult.Updates.Count) }
-                }
-                catch {
-                    Add-Result $results 'updates' 'unsupported' ('Windows Update search is unavailable: ' + $_.Exception.Message)
-                }
-            }
-        }
-    }
-    catch {
-        Add-Result $results $check 'error' $_.Exception.Message
-    }
+    $results += Invoke-HealthCheck -Name $check -DiskWarning $diskWarning
 }
 
 $exitCode = 0

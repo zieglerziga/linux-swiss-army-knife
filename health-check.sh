@@ -270,7 +270,114 @@ check_sudo()
     fi
 }
 
-filesystem_output()
+find_mount_table()
+{
+    if [ -n "$HEALTH_TEST_MOUNTS_PATH" ]; then
+        [ -r "$HEALTH_TEST_MOUNTS_PATH" ] || return 1
+        printf '%s\n' "$HEALTH_TEST_MOUNTS_PATH"
+    elif [ -r /proc/self/mounts ]; then
+        printf '%s\n' /proc/self/mounts
+    elif [ -r /proc/mounts ]; then
+        printf '%s\n' /proc/mounts
+    else
+        return 1
+    fi
+}
+
+classify_mounts()
+{
+    awk '
+        BEGIN {
+            local_types="rootfs ext2 ext3 ext4 xfs btrfs bcachefs f2fs"
+            local_types=local_types " vfat exfat ntfs ntfs3 fuseblk zfs"
+            local_types=local_types " tmpfs devtmpfs overlay squashfs erofs ramfs"
+            local_types=local_types " ubifs jffs2 jfs nilfs2 reiserfs reiser4"
+
+            remote_types="nfs nfs4 cifs smbfs smb3 9p afs ceph ceph-fuse"
+            remote_types=remote_types " fuse.ceph glusterfs fuse.glusterfs lustre"
+            remote_types=remote_types " sshfs fuse.sshfs davfs davfs2 gfs2 ocfs2"
+            remote_types=remote_types " gpfs orangefs pvfs2"
+
+            pseudo_types="proc sysfs cgroup cgroup2 devpts mqueue pstore"
+            pseudo_types=pseudo_types " debugfs tracefs securityfs efivarfs"
+            pseudo_types=pseudo_types " configfs fusectl fuse.portal"
+            pseudo_types=pseudo_types " fuse.gvfsd-fuse autofs binfmt_misc"
+            pseudo_types=pseudo_types " hugetlbfs rpc_pipefs nsfs bpf"
+        }
+        function list_contains(list, item) {
+            return index(" " list " ", " " item " ") > 0
+        }
+        $4 !~ /(^|,)rw(,|$)/ { next }
+        list_contains(local_types, $3) {
+            print "local\t" $2
+            next
+        }
+        !list_contains(remote_types, $3) &&
+            !list_contains(pseudo_types, $3) && !seen_unknown[$3]++ {
+            print "unknown\t" $3
+        }
+    ' "$1"
+}
+
+decode_mount_path()
+{
+    printf '%s' "$1" | sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g'
+}
+
+read_mount_capacity()
+{
+    capacity_path=$1
+    capacity_output=$(LC_ALL=C df -Pk "$capacity_path" 2>/dev/null)
+    capacity_status=$?
+    capacity_row_found=$(printf '%s\n' "$capacity_output" | awk '
+        {
+            value=$5
+            sub(/%$/, "", value)
+            if (value ~ /^[0-9]+$/) found=1
+        }
+        END { print found + 0 }
+    ')
+
+    [ -z "$capacity_output" ] || printf '%s\n' "$capacity_output"
+    if [ "$capacity_status" -ne 0 ] || [ "$capacity_row_found" -ne 1 ]; then
+        printf 'HEALTH_UNREADABLE_FILESYSTEM\t%s\n' "$capacity_path"
+    fi
+}
+
+collect_mount_table_filesystems()
+{
+    # HEALTH_* rows explain why a scan is incomplete.
+    mount_rows=$(classify_mounts "$1")
+    if [ -z "$mount_rows" ]; then
+        printf '%s\n' 'HEALTH_NO_WRITABLE_FILESYSTEMS'
+        return
+    fi
+
+    printf '%s\n' "$mount_rows" |
+        while IFS="$(printf '\t')" read -r mount_kind mount_value; do
+            if [ "$mount_kind" = unknown ]; then
+                printf 'HEALTH_UNKNOWN_FILESYSTEM\t%s\n' "$mount_value"
+            else
+                mount_path=$(decode_mount_path "$mount_value")
+                read_mount_capacity "$mount_path"
+            fi
+        done
+}
+
+collect_global_filesystems()
+{
+    global_output=$(LC_ALL=C df -Pkl 2>/dev/null)
+    global_status=$?
+    [ -n "$global_output" ] || return 1
+
+    printf '%s\n' "$global_output"
+    if [ "$global_status" -ne 0 ]; then
+        printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\t%s\n' \
+            'df -Pkl returned nonzero'
+    fi
+}
+
+collect_filesystem_rows()
 {
     if [ -n "$HEALTH_FIXTURE_ROOT" ]; then
         fixture_df=$HEALTH_FIXTURE_ROOT/df.txt
@@ -280,88 +387,65 @@ filesystem_output()
     fi
 
     command -v df >/dev/null 2>&1 || return 1
-    mounts_path=$HEALTH_TEST_MOUNTS_PATH
-    if [ -z "$mounts_path" ]; then
-        if [ -r /proc/self/mounts ]; then
-            mounts_path=/proc/self/mounts
-        elif [ -r /proc/mounts ]; then
-            mounts_path=/proc/mounts
-        fi
+    if mount_table=$(find_mount_table); then
+        # Reading the mount table keeps bind paths that GNU df normally hides.
+        collect_mount_table_filesystems "$mount_table"
+    else
+        collect_global_filesystems
     fi
+}
 
-    if [ -n "$mounts_path" ] && [ -r "$mounts_path" ]; then
-        # Enumerating procfs preserves distinct bind-mount paths that GNU df
-        # hides by default. It also supports BusyBox, whose df has no -l flag.
-        # Classify mounts conservatively and mark unknown types so an
-        # incomplete scan cannot falsely pass.
-        filesystem_data=$(awk '
-            function is_local(type) {
-                return type ~ /^(rootfs|ext2|ext3|ext4|xfs|btrfs|bcachefs|f2fs|vfat|exfat|ntfs|ntfs3|fuseblk|zfs|tmpfs|devtmpfs|overlay|squashfs|erofs|ramfs|ubifs|jffs2|jfs|nilfs2|reiserfs|reiser4)$/
-            }
-            function is_remote(type) {
-                return type ~ /^(nfs|nfs4|cifs|smbfs|smb3|9p|afs|ceph|ceph-fuse|fuse\.ceph|glusterfs|fuse\.glusterfs|lustre|sshfs|fuse\.sshfs|davfs|davfs2|gfs2|ocfs2|gpfs|orangefs|pvfs2)$/
-            }
-            function is_pseudo(type) {
-                return type ~ /^(proc|sysfs|cgroup|cgroup2|devpts|mqueue|pstore|debugfs|tracefs|securityfs|efivarfs|configfs|fusectl|fuse\.portal|fuse\.gvfsd-fuse|autofs|binfmt_misc|hugetlbfs|rpc_pipefs|nsfs|bpf)$/
-            }
-            function is_writable(options) {
-                return options ~ /(^|,)rw(,|$)/
-            }
-            !is_writable($4) {
-                next
-            }
-            is_local($3) {
-                print "local\t" $2
-                next
-            }
-            !is_remote($3) && !is_pseudo($3) && !seen_unknown[$3]++ {
-                print "unknown\t" $3
-            }
-        ' "$mounts_path" | while IFS="$(printf '\t')" read -r mount_kind mount_value; do
-            if [ "$mount_kind" = unknown ]; then
-                printf 'HEALTH_UNKNOWN_FILESYSTEM\t%s\n' "$mount_value"
-                continue
-            fi
-            escaped_mount=$mount_value
-            mount_path=$(printf '%s' "$escaped_mount" |
-                sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
-            mount_output=$(LC_ALL=C df -Pk "$mount_path" 2>/dev/null)
-            mount_status=$?
-            mount_row_found=$(printf '%s\n' "$mount_output" | awk '
-                {
-                    capacity=$5
-                    sub(/%$/, "", capacity)
-                    if (capacity ~ /^[0-9]+$/) found=1
-                }
-                END { print found + 0 }
-            ')
-            if [ -n "$mount_output" ]; then
-                printf '%s\n' "$mount_output"
-            fi
-            if [ "$mount_status" -ne 0 ] || [ "$mount_row_found" -ne 1 ]; then
-                printf 'HEALTH_UNREADABLE_FILESYSTEM\t%s\n' "$mount_path"
-            fi
-        done)
-        if [ -n "$filesystem_data" ]; then
-            printf '%s\n' "$filesystem_data"
-            return 0
-        fi
-        printf '%s\n' 'HEALTH_NO_WRITABLE_FILESYSTEMS'
-        return 0
-    fi
+disk_capacity_rows()
+{
+    awk '
+        function is_pseudo_source(source) {
+            return source ~ /^(devfs|procfs|linprocfs|linsysfs|fdesc|fdescfs|map|-hosts)$/
+        }
+        $1 ~ /^HEALTH_/ { next }
+        is_pseudo_source($1) { next }
+        {
+            capacity=$5
+            sub(/%$/, "", capacity)
+            if (capacity !~ /^[0-9]+$/) next
 
-    filesystem_data=$(LC_ALL=C df -Pkl 2>/dev/null)
-    filesystem_status=$?
-    [ -n "$filesystem_data" ] || return 1
-    printf '%s\n' "$filesystem_data"
-    if [ "$filesystem_status" -ne 0 ]; then
-        printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\tdf -Pkl returned nonzero\n'
-    fi
+            mount_point=$6
+            for (field=7; field<=NF; field++) {
+                mount_point=mount_point " " $field
+            }
+            if (!seen_mount[mount_point]++) {
+                print capacity + 0 "\t" mount_point
+            }
+        }
+    '
+}
+
+collect_marker_details()
+{
+    marker_name=$1
+    marker_separator=$2
+    awk -v marker="$marker_name" -v separator="$marker_separator" '
+        $1 == marker {
+            detail=$2
+            for (field=3; field<=NF; field++) {
+                detail=detail " " $field
+            }
+            if (!seen[detail]++) {
+                if (result != "") result=result separator
+                result=result detail
+            }
+        }
+        END { print result }
+    '
+}
+
+count_nonempty_lines()
+{
+    awk 'NF { count++ } END { print count + 0 }'
 }
 
 check_disk()
 {
-    disk_output=$(filesystem_output) || {
+    disk_output=$(collect_filesystem_rows) || {
         emit_result disk error 'local filesystem usage could not be read'
         return
     }
@@ -370,75 +454,27 @@ check_disk()
         return
     fi
 
-    disk_summary=$(printf '%s\n' "$disk_output" | awk -v threshold="$DISK_WARNING" '
-        function clean(value) {
-            gsub(/[\t\r\n]/, " ", value)
-            return value
-        }
-        function is_pseudo_source(source) {
-            return source ~ /^(devfs|procfs|linprocfs|linsysfs|fdesc|fdescfs|map|-hosts)$/
-        }
-        {
-            if ($1 == "HEALTH_UNKNOWN_FILESYSTEM") {
-                if (unknown_types != "") unknown_types=unknown_types ","
-                unknown_types=unknown_types $2
-                next
-            }
-            if ($1 == "HEALTH_UNREADABLE_FILESYSTEM") {
-                unreadable_mount=$2
-                for (field=3; field<=NF; field++) {
-                    unreadable_mount=unreadable_mount " " $field
-                }
-                if (!seen_unreadable[unreadable_mount]++) {
-                    if (unreadable_mounts != "") unreadable_mounts=unreadable_mounts ","
-                    unreadable_mounts=unreadable_mounts unreadable_mount
-                }
-                next
-            }
-            if ($1 == "HEALTH_INCOMPLETE_FILESYSTEM_SCAN") {
-                query_failure=$2
-                for (field=3; field<=NF; field++) {
-                    query_failure=query_failure " " $field
-                }
-                if (!seen_failure[query_failure]++) {
-                    if (query_failures != "") query_failures=query_failures ","
-                    query_failures=query_failures query_failure
-                }
-                next
-            }
-            if (is_pseudo_source($1)) next
-            capacity=$5
-            sub(/%$/, "", capacity)
-            if (capacity !~ /^[0-9]+$/) next
-            capacity_number=capacity + 0
-            mount_point=$6
-            for (field=7; field<=NF; field++) {
-                mount_point=mount_point " " $field
-            }
-            if (seen_mount[mount_point]++) next
-            valid++
-            if (capacity_number > highest) highest=capacity_number
-            if (capacity_number >= threshold + 0) {
-                mount_point=clean(mount_point)
+    capacity_rows=$(printf '%s\n' "$disk_output" | disk_capacity_rows)
+    disk_valid=$(printf '%s\n' "$capacity_rows" | count_nonempty_lines)
+    disk_highest=$(printf '%s\n' "$capacity_rows" |
+        awk '$1 > highest { highest=$1 } END { print highest + 0 }')
+    disk_warning_count=$(printf '%s\n' "$capacity_rows" |
+        awk -v threshold="$DISK_WARNING" \
+            '$1 >= threshold { count++ } END { print count + 0 }')
+    disk_items=$(printf '%s\n' "$capacity_rows" |
+        awk -F "$(printf '\t')" -v threshold="$DISK_WARNING" '
+            $1 >= threshold {
                 if (items != "") items=items ", "
-                items=items mount_point "=" capacity_number "%"
-                warning++
+                items=items $2 "=" $1 "%"
             }
-        }
-        END { printf "%d|%d|%d|%s|%s|%s|%s", valid, highest, warning, items, unknown_types, unreadable_mounts, query_failures }
-    ')
-    disk_valid=${disk_summary%%|*}
-    disk_remaining=${disk_summary#*|}
-    disk_highest=${disk_remaining%%|*}
-    disk_remaining=${disk_remaining#*|}
-    disk_warning_count=${disk_remaining%%|*}
-    disk_remaining=${disk_remaining#*|}
-    disk_items=${disk_remaining%%|*}
-    disk_remaining=${disk_remaining#*|}
-    disk_unknown_types=${disk_remaining%%|*}
-    disk_remaining=${disk_remaining#*|}
-    disk_unreadable_mounts=${disk_remaining%%|*}
-    disk_query_failures=${disk_remaining#*|}
+            END { print items }
+        ')
+    disk_unknown_types=$(printf '%s\n' "$disk_output" |
+        collect_marker_details HEALTH_UNKNOWN_FILESYSTEM ',')
+    disk_unreadable_mounts=$(printf '%s\n' "$disk_output" |
+        collect_marker_details HEALTH_UNREADABLE_FILESYSTEM ',')
+    disk_query_failures=$(printf '%s\n' "$disk_output" |
+        collect_marker_details HEALTH_INCOMPLETE_FILESYSTEM_SCAN ',')
 
     disk_incomplete=
     if [ -n "$disk_unknown_types" ]; then
@@ -458,107 +494,104 @@ check_disk()
     elif [ "$disk_valid" -eq 0 ]; then
         emit_result disk error 'filesystem output contained no usable capacity rows'
     elif [ "$disk_warning_count" -gt 0 ]; then
-        disk_detail="$disk_warning_count local filesystem path(s) at or above $DISK_WARNING%: $disk_items"
+        disk_detail="$disk_warning_count local filesystem path(s) at or above "
+        disk_detail="${disk_detail}$DISK_WARNING%: $disk_items"
         if [ -n "$disk_incomplete" ]; then
             disk_detail="$disk_detail; scan incomplete: $disk_incomplete"
         fi
         emit_result disk warn "$disk_detail"
     elif [ -n "$disk_incomplete" ]; then
-        emit_result disk unsupported \
-            "known local filesystems are below $DISK_WARNING%, but scan is incomplete: $disk_incomplete"
+        disk_detail="known local filesystems are below $DISK_WARNING%, "
+        disk_detail="${disk_detail}but scan is incomplete: $disk_incomplete"
+        emit_result disk unsupported "$disk_detail"
     else
         emit_result disk pass \
             "highest local filesystem use is $disk_highest%; warning threshold is $DISK_WARNING%"
     fi
 }
 
-process_rows()
+procfs_hides_processes()
 {
-    if [ -n "$HEALTH_FIXTURE_ROOT" ]; then
-        fixture_processes=$HEALTH_FIXTURE_ROOT/processes.tsv
-        [ -r "$fixture_processes" ] || return 1
-        cat "$fixture_processes"
-        return
-    fi
-
-    process_root=$HEALTH_TEST_PROC_ROOT
-    [ -n "$process_root" ] || process_root=/proc
-    if [ -d "$process_root" ]; then
-        # Keep only the small PID/state/name projection instead of retaining
-        # complete process metadata in memory on large hosts.
-        process_mounts_path=$HEALTH_TEST_PROC_MOUNTS_PATH
-        if [ -z "$process_mounts_path" ] && [ "$process_root" = /proc ] &&
-            [ -r /proc/mounts ]; then
-            process_mounts_path=/proc/mounts
-        fi
-        if [ -n "$process_mounts_path" ] && [ -r "$process_mounts_path" ] &&
-            awk '
-                $2 == "/proc" && $3 == "proc" {
-                    option_count=split($4, options, ",")
-                    for (option_index=1; option_index<=option_count; option_index++) {
-                        if (options[option_index] ~ /^hidepid=/ &&
-                            options[option_index] != "hidepid=0") {
-                            hidden=1
-                        }
-                    }
+    awk '
+        $2 == "/proc" && $3 == "proc" {
+            option_count=split($4, options, ",")
+            for (option_index=1; option_index<=option_count; option_index++) {
+                if (options[option_index] ~ /^hidepid=/ &&
+                    options[option_index] != "hidepid=0") {
+                    hidden=1
                 }
-                END { exit hidden ? 0 : 1 }
-            ' "$process_mounts_path"; then
-            printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
-                'procfs uses hidepid'
-        fi
+            }
+        }
+        END { exit hidden ? 0 : 1 }
+    ' "$1"
+}
 
-        process_seen=0
-        process_unreadable=0
-        for process_directory in "$process_root"/[0-9]*; do
-            [ -d "$process_directory" ] || continue
-            process_stat=$process_directory/stat
-            if [ ! -r "$process_stat" ]; then
-                [ -d "$process_directory" ] &&
-                    process_unreadable=$((process_unreadable + 1))
-                continue
-            fi
-            process_line=$(sed -n '1p' "$process_stat" 2>/dev/null)
-            process_status=$?
-            if [ "$process_status" -ne 0 ] || [ -z "$process_line" ]; then
-                [ -d "$process_directory" ] &&
-                    process_unreadable=$((process_unreadable + 1))
-                continue
-            fi
-            process_id=${process_directory##*/}
-            process_tail=${process_line##*) }
-            process_state=${process_tail%% *}
-            case "$process_state" in
-                [ABCDEFGHIJKLMNOPQRSTUVWXYZ]) ;;
-                *)
-                    process_unreadable=$((process_unreadable + 1))
-                    continue
-                    ;;
-            esac
-            process_name=
-            if [ -r "$process_directory/comm" ]; then
-                process_name=$(sed -n '1p' "$process_directory/comm" 2>/dev/null)
-            fi
-            printf '%s\t%s\t%s\n' "$process_id" "$process_state" "$process_name"
-            process_seen=$((process_seen + 1))
-        done
-        if [ "$process_unreadable" -gt 0 ]; then
-            printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%d unreadable process entr' \
-                "$process_unreadable"
-            if [ "$process_unreadable" -eq 1 ]; then
-                printf '%s\n' 'y'
-            else
-                printf '%s\n' 'ies'
-            fi
-        fi
-        if [ "$process_seen" -eq 0 ]; then
-            printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
-                'no readable process entries'
-        fi
-        return
+read_procfs_processes()
+{
+    process_root=$1
+    process_mounts_path=$HEALTH_TEST_PROC_MOUNTS_PATH
+    if [ -z "$process_mounts_path" ] && [ "$process_root" = /proc ] &&
+        [ -r /proc/mounts ]; then
+        process_mounts_path=/proc/mounts
+    fi
+    if [ -n "$process_mounts_path" ] && [ -r "$process_mounts_path" ] &&
+        procfs_hides_processes "$process_mounts_path"; then
+        printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' 'procfs uses hidepid'
     fi
 
+    process_seen=0
+    process_unreadable=0
+    for process_directory in "$process_root"/[0-9]*; do
+        [ -d "$process_directory" ] || continue
+        process_stat=$process_directory/stat
+        if [ ! -r "$process_stat" ]; then
+            process_unreadable=$((process_unreadable + 1))
+            continue
+        fi
+
+        process_line=$(sed -n '1p' "$process_stat" 2>/dev/null)
+        process_status=$?
+        if [ "$process_status" -ne 0 ] || [ -z "$process_line" ]; then
+            [ -d "$process_directory" ] &&
+                process_unreadable=$((process_unreadable + 1))
+            continue
+        fi
+
+        process_id=${process_directory##*/}
+        process_tail=${process_line##*) }
+        process_state=${process_tail%% *}
+        case "$process_state" in
+            [ABCDEFGHIJKLMNOPQRSTUVWXYZ]) ;;
+            *)
+                process_unreadable=$((process_unreadable + 1))
+                continue
+                ;;
+        esac
+
+        process_name=
+        if [ -r "$process_directory/comm" ]; then
+            process_name=$(sed -n '1p' "$process_directory/comm" 2>/dev/null)
+        fi
+        printf '%s\t%s\t%s\n' "$process_id" "$process_state" "$process_name"
+        process_seen=$((process_seen + 1))
+    done
+
+    if [ "$process_unreadable" -eq 1 ]; then
+        printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t1 unreadable process entry\n'
+    elif [ "$process_unreadable" -gt 1 ]; then
+        printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%d unreadable process entries\n' \
+            "$process_unreadable"
+    fi
+    if [ "$process_seen" -eq 0 ]; then
+        printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
+            'no readable process entries'
+    fi
+}
+
+read_ps_processes()
+{
     command -v ps >/dev/null 2>&1 || return 1
+
     process_output=$(ps -eo pid=,stat=,etime=,comm= 2>/dev/null)
     process_status=$?
     if [ "$process_status" -ne 0 ] || [ -z "$process_output" ]; then
@@ -573,15 +606,16 @@ process_rows()
         process_ps_incomplete=0
     fi
     [ "$process_status" -eq 0 ] && [ -n "$process_output" ] || return 1
-    process_formatted=$(printf '%s\n' "$process_output" |
-        awk '
-            $1 ~ /^[0-9]+$/ && $2 ~ /^[[:alpha:]]/ {
-                print $1 "\t" $2 "\t" $4
-                found=1
-            }
-            END { if (!found) exit 1 }
-        ') || return 1
+
+    process_formatted=$(printf '%s\n' "$process_output" | awk '
+        $1 ~ /^[0-9]+$/ && $2 ~ /^[[:alpha:]]/ {
+            print $1 "\t" $2 "\t" $4
+            found=1
+        }
+        END { if (!found) exit 1 }
+    ') || return 1
     [ -n "$process_formatted" ] || return 1
+
     printf '%s\n' "$process_formatted"
     if [ "$process_ps_incomplete" -eq 1 ]; then
         printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
@@ -589,40 +623,56 @@ process_rows()
     fi
 }
 
+collect_process_rows()
+{
+    if [ -n "$HEALTH_FIXTURE_ROOT" ]; then
+        fixture_processes=$HEALTH_FIXTURE_ROOT/processes.tsv
+        [ -r "$fixture_processes" ] || return 1
+        cat "$fixture_processes"
+        return
+    fi
+
+    process_root=$HEALTH_TEST_PROC_ROOT
+    [ -n "$process_root" ] || process_root=/proc
+    if [ -d "$process_root" ]; then
+        read_procfs_processes "$process_root"
+    else
+        read_ps_processes
+    fi
+}
+
+stuck_process_rows()
+{
+    awk '
+        $1 == "HEALTH_INCOMPLETE_PROCESS_SCAN" { next }
+        $2 ~ /^[DZ]/ {
+            name=$3
+            if (name == "") name="unknown"
+            gsub(/[|\t\r\n]/, " ", name)
+            print $1 "\t" $2 "\t" name
+        }
+    '
+}
+
 check_processes()
 {
-    processes_output=$(process_rows) || {
+    processes_output=$(collect_process_rows) || {
         emit_result processes unsupported 'process states are unavailable on this platform'
         return
     }
 
-    process_summary=$(printf '%s\n' "$processes_output" | awk '
-        $1 == "HEALTH_INCOMPLETE_PROCESS_SCAN" {
-            detail=$2
-            for (field=3; field<=NF; field++) detail=detail " " $field
-            if (!seen_incomplete[detail]++) {
-                if (incomplete != "") incomplete=incomplete "; "
-                incomplete=incomplete detail
-            }
-            next
-        }
-        $2 ~ /^[DZ]/ {
-            count++
-            if (listed < 10) {
+    stuck_rows=$(printf '%s\n' "$processes_output" | stuck_process_rows)
+    process_count=$(printf '%s\n' "$stuck_rows" | count_nonempty_lines)
+    process_items=$(printf '%s\n' "$stuck_rows" |
+        awk -F "$(printf '\t')" '
+            NR <= 10 {
                 if (items != "") items=items ", "
-                name=$3
-                if (name == "") name="unknown"
-                gsub(/[|\t\r\n]/, " ", name)
-                items=items $1 ":" $2 ":" name
-                listed++
+                items=items $1 ":" $2 ":" $3
             }
-        }
-        END { printf "%d|%s|%s", count, items, incomplete }
-    ')
-    process_count=${process_summary%%|*}
-    process_remaining=${process_summary#*|}
-    process_items=${process_remaining%%|*}
-    process_incomplete=${process_remaining#*|}
+            END { print items }
+        ')
+    process_incomplete=$(printf '%s\n' "$processes_output" |
+        collect_marker_details HEALTH_INCOMPLETE_PROCESS_SCAN '; ')
 
     if [ "$process_count" -gt 0 ]; then
         process_suffix=
@@ -639,11 +689,6 @@ check_processes()
     fi
 }
 
-count_nonempty_lines()
-{
-    awk 'NF { count++ } END { print count + 0 }'
-}
-
 emit_update_count()
 {
     update_manager=$1
@@ -657,6 +702,105 @@ emit_update_count()
     fi
 }
 
+find_package_manager()
+{
+    for manager_candidate in apt-get dnf yum zypper apk pacman brew; do
+        if command -v "$manager_candidate" >/dev/null 2>&1; then
+            printf '%s\n' "$manager_candidate"
+            return
+        fi
+    done
+    return 1
+}
+
+check_apt_updates()
+{
+    update_output=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null)
+    update_status=$?
+    if [ "$update_status" -ne 0 ]; then
+        emit_result updates error 'apt-get could not query cached upgrade metadata'
+        return
+    fi
+    update_count=$(printf '%s\n' "$update_output" |
+        awk '/^Inst / { count++ } END { print count + 0 }')
+    emit_update_count apt-get "$update_count"
+}
+
+check_dnf_updates()
+{
+    update_output=$(LC_ALL=C dnf -q --cacheonly check-update 2>/dev/null)
+    update_status=$?
+    if [ "$update_status" -ne 0 ] && [ "$update_status" -ne 100 ]; then
+        emit_result updates error 'dnf could not query cached update metadata'
+        return
+    fi
+    update_count=$(printf '%s\n' "$update_output" | awk '
+        $1 ~ /^[[:alnum:]_.+-]+\.[[:alnum:]_]+$/ { count++ }
+        END { print count + 0 }
+    ')
+    emit_update_count dnf "$update_count"
+}
+
+check_yum_updates()
+{
+    update_output=$(LC_ALL=C yum -q -C check-update 2>/dev/null)
+    update_status=$?
+    if [ "$update_status" -ne 0 ] && [ "$update_status" -ne 100 ]; then
+        emit_result updates error 'yum could not query cached update metadata'
+        return
+    fi
+    update_count=$(printf '%s\n' "$update_output" | awk '
+        $1 ~ /^[[:alnum:]_.+-]+\.[[:alnum:]_]+$/ { count++ }
+        END { print count + 0 }
+    ')
+    emit_update_count yum "$update_count"
+}
+
+check_zypper_updates()
+{
+    update_output=$(LC_ALL=C zypper --non-interactive --no-refresh list-updates 2>/dev/null) || {
+        emit_result updates error 'zypper could not query cached update metadata'
+        return
+    }
+    update_count=$(printf '%s\n' "$update_output" | awk -F '|' '
+        $1 ~ /^[[:space:]]*v[[:space:]]*$/ { count++ }
+        END { print count + 0 }
+    ')
+    emit_update_count zypper "$update_count"
+}
+
+check_apk_updates()
+{
+    update_output=$(LC_ALL=C apk version -l '<' 2>/dev/null) || {
+        emit_result updates error 'apk could not query cached update metadata'
+        return
+    }
+    update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
+    emit_update_count apk "$update_count"
+}
+
+check_pacman_updates()
+{
+    update_output=$(LC_ALL=C pacman -Qu 2>/dev/null)
+    update_status=$?
+    if [ "$update_status" -ne 0 ]; then
+        emit_result updates error 'pacman could not query cached update metadata'
+        return
+    fi
+    update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
+    emit_update_count pacman "$update_count"
+}
+
+check_brew_updates()
+{
+    update_output=$(HOMEBREW_NO_AUTO_UPDATE=1 LC_ALL=C brew outdated 2>/dev/null) || {
+        emit_result updates error 'Homebrew could not query installed formula metadata'
+        return
+    }
+    update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
+    emit_update_count brew "$update_count"
+}
+
 check_updates()
 {
     if [ -n "$HEALTH_FIXTURE_ROOT" ]; then
@@ -666,12 +810,7 @@ check_updates()
 
     update_manager=$HEALTH_TEST_PACKAGE_MANAGER
     if [ -z "$update_manager" ]; then
-        for manager_candidate in apt-get dnf yum zypper apk pacman brew; do
-            if command -v "$manager_candidate" >/dev/null 2>&1; then
-                update_manager=$manager_candidate
-                break
-            fi
-        done
+        update_manager=$(find_package_manager) || update_manager=
     fi
 
     if [ -z "$update_manager" ]; then
@@ -684,79 +823,15 @@ check_updates()
     }
 
     case "$update_manager" in
-    apt-get)
-        update_output=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null)
-        update_status=$?
-        if [ "$update_status" -ne 0 ]; then
-            emit_result updates error 'apt-get could not query cached upgrade metadata'
-            return
-        fi
-        update_count=$(printf '%s\n' "$update_output" | awk '/^Inst / { count++ } END { print count + 0 }')
-        emit_update_count apt-get "$update_count"
-        ;;
-
-    dnf)
-        update_output=$(LC_ALL=C dnf -q --cacheonly check-update 2>/dev/null)
-        update_status=$?
-        if [ "$update_status" -ne 0 ] && [ "$update_status" -ne 100 ]; then
-            emit_result updates error 'dnf could not query cached update metadata'
-            return
-        fi
-        update_count=$(printf '%s\n' "$update_output" | awk '$1 ~ /^[[:alnum:]_.+-]+\.[[:alnum:]_]+$/ { count++ } END { print count + 0 }')
-        emit_update_count dnf "$update_count"
-        ;;
-
-    yum)
-        update_output=$(LC_ALL=C yum -q -C check-update 2>/dev/null)
-        update_status=$?
-        if [ "$update_status" -ne 0 ] && [ "$update_status" -ne 100 ]; then
-            emit_result updates error 'yum could not query cached update metadata'
-            return
-        fi
-        update_count=$(printf '%s\n' "$update_output" | awk '$1 ~ /^[[:alnum:]_.+-]+\.[[:alnum:]_]+$/ { count++ } END { print count + 0 }')
-        emit_update_count yum "$update_count"
-        ;;
-
-    zypper)
-        update_output=$(LC_ALL=C zypper --non-interactive --no-refresh list-updates 2>/dev/null) || {
-            emit_result updates error 'zypper could not query cached update metadata'
-            return
-        }
-        update_count=$(printf '%s\n' "$update_output" | awk -F '|' '$1 ~ /^[[:space:]]*v[[:space:]]*$/ { count++ } END { print count + 0 }')
-        emit_update_count zypper "$update_count"
-        ;;
-
-    apk)
-        update_output=$(LC_ALL=C apk version -l '<' 2>/dev/null) || {
-            emit_result updates error 'apk could not query cached update metadata'
-            return
-        }
-        update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
-        emit_update_count apk "$update_count"
-        ;;
-
-    pacman)
-        update_output=$(LC_ALL=C pacman -Qu 2>/dev/null)
-        update_status=$?
-        if [ "$update_status" -ne 0 ]; then
-            emit_result updates error 'pacman could not query cached update metadata'
-            return
-        fi
-        update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
-        emit_update_count pacman "$update_count"
-        ;;
-
-    brew)
-        update_output=$(HOMEBREW_NO_AUTO_UPDATE=1 LC_ALL=C brew outdated 2>/dev/null) || {
-            emit_result updates error 'Homebrew could not query installed formula metadata'
-            return
-        }
-        update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
-        emit_update_count brew "$update_count"
-        ;;
-    *)
-        emit_result updates error "unsupported package-manager override: $update_manager"
-        ;;
+        apt-get) check_apt_updates ;;
+        dnf) check_dnf_updates ;;
+        yum) check_yum_updates ;;
+        zypper) check_zypper_updates ;;
+        apk) check_apk_updates ;;
+        pacman) check_pacman_updates ;;
+        brew) check_brew_updates ;;
+        *) emit_result updates error \
+            "unsupported package-manager override: $update_manager" ;;
     esac
 }
 
