@@ -12,6 +12,7 @@ repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd) ||
     fail 'cannot resolve repository root'
 collector=$repository_root/health-check.sh
 fixture_root=$repository_root/tests/fixtures/health-basic
+full_disk_fixture_root=$repository_root/tests/fixtures/health-disk-100
 test_shell=${TEST_SHELL:-sh}
 test_directory=$(mktemp -d "${TMPDIR:-/tmp}/health-check-test.XXXXXX") ||
     fail 'cannot create temporary test directory'
@@ -49,6 +50,18 @@ disk_pass=$(HEALTH_FIXTURE_ROOT=$fixture_root run_health_check \
     --plain --disk --disk-warning 95) || fail 'disk pass fixture failed'
 expected_disk_pass=$(printf 'disk\tpass\thighest local filesystem use is 90%%; warning threshold is 95%%')
 [ "$disk_pass" = "$expected_disk_pass" ] || fail 'disk pass output is not exact'
+
+full_disk_output=
+if full_disk_output=$(HEALTH_FIXTURE_ROOT=$full_disk_fixture_root \
+    run_health_check --plain --disk --disk-warning 85); then
+    fail '100 percent disk fixture unexpectedly returned success'
+else
+    full_disk_status=$?
+fi
+[ "$full_disk_status" -eq 1 ] || fail '100 percent disk fixture did not warn'
+expected_full_disk=$(printf 'disk\twarn\t1 local filesystem path(s) at or above 85%%: /var/full=100%%')
+[ "$full_disk_output" = "$expected_full_disk" ] ||
+    fail '100 percent capacity was not compared numerically'
 
 process_output=
 if process_output=$(HEALTH_FIXTURE_ROOT=$fixture_root run_health_check --plain --processes); then
@@ -102,6 +115,12 @@ case " $* " in
 Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/root 1000 900 100 90% /
 DF_OUTPUT
+        elif [ "${HEALTH_DF_HIDE_BIND:-0}" -eq 1 ]; then
+            cat <<'DF_OUTPUT'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root 1000 900 100 90% /
+DF_OUTPUT
+            exit 0
         fi
         exit 1
         ;;
@@ -142,20 +161,21 @@ cat >"$test_directory/mounts" <<'MOUNTS'
 /dev/root / ext4 rw 0 0
 server:/share /remote nfs rw 0 0
 MOUNTS
-partial_df_output=$(PATH="$test_directory/df-bin:$PATH" \
+mount_table_output=$(PATH="$test_directory/df-bin:$PATH" \
     HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
     HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
     --plain --disk --disk-warning 95) ||
-    fail 'procfs fallback did not recover from unsupported df -l syntax'
-[ "$partial_df_output" = "$expected_disk_pass" ] ||
-    fail 'partial-success df output was parsed incorrectly'
+    fail 'procfs mount enumeration failed'
+[ "$mount_table_output" = "$expected_disk_pass" ] ||
+    fail 'procfs mount enumeration output was parsed incorrectly'
 if grep -q '/remote' "$test_directory/df-arguments.txt"; then
-    fail 'BusyBox df fallback queried a network mount'
+    fail 'procfs mount enumeration queried a network mount'
 fi
 
 global_partial_output=
 if global_partial_output=$(PATH="$test_directory/df-bin:$PATH" \
     HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/missing-mounts" \
     HEALTH_DF_GLOBAL_PARTIAL=1 run_health_check \
     --plain --disk --disk-warning 95); then
     fail 'partial nonzero local-only df output unexpectedly passed'
@@ -171,10 +191,13 @@ expected_global_partial=$(printf 'disk\tunsupported\tknown local filesystems are
 cat >"$test_directory/mounts" <<'MOUNTS'
 /dev/root / ext4 rw 0 0
 /dev/root /bind ext4 rw,bind 0 0
+/dev/loop0 /snap/example/1 squashfs ro,nodev 0 0
+/dev/loop1 /media/example iso9660 ro,nodev 0 0
 MOUNTS
 bind_output=
 if bind_output=$(PATH="$test_directory/df-bin:$PATH" \
     HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_DF_HIDE_BIND=1 \
     HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
     --plain --disk --disk-warning 85); then
     fail 'full bind-mount fixture unexpectedly returned success'

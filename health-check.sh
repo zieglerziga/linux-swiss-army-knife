@@ -32,7 +32,7 @@ Run explicitly selected system health checks.
 
 Checks:
   --sudo              Detect root or non-interactive sudo access
-  --disk              Report distinct local filesystem paths over a usage threshold
+  --disk              Report local filesystem paths over a usage threshold
   --processes         Detect processes in uninterruptible or zombie states
   --updates           Check cached package metadata for available updates
   --all               Run all four checks
@@ -272,16 +272,6 @@ filesystem_output()
     fi
 
     command -v df >/dev/null 2>&1 || return 1
-    filesystem_data=$(LC_ALL=C df -Pkl 2>/dev/null)
-    filesystem_status=$?
-    if [ -n "$filesystem_data" ]; then
-        printf '%s\n' "$filesystem_data"
-        if [ "$filesystem_status" -ne 0 ]; then
-            printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\tdf -Pkl returned nonzero\n'
-        fi
-        return 0
-    fi
-
     mounts_path=$HEALTH_TEST_MOUNTS_PATH
     if [ -z "$mounts_path" ]; then
         if [ -r /proc/self/mounts ]; then
@@ -290,55 +280,73 @@ filesystem_output()
             mounts_path=/proc/mounts
         fi
     fi
-    [ -n "$mounts_path" ] && [ -r "$mounts_path" ] || return 1
 
-    # BusyBox df has no local-only flag. Classify procfs mounts conservatively:
-    # query known local types, skip known remote/pseudo types, and carry an
-    # explicit marker for anything unknown so the result cannot falsely pass.
-    filesystem_data=$(awk '
-        function is_local(type) {
-            return type ~ /^(rootfs|ext2|ext3|ext4|xfs|btrfs|bcachefs|f2fs|vfat|exfat|ntfs|ntfs3|fuseblk|zfs|tmpfs|devtmpfs|overlay|squashfs|erofs|ramfs|ubifs|jffs2|jfs|nilfs2|reiserfs|reiser4)$/
-        }
-        function is_remote(type) {
-            return type ~ /^(nfs|nfs4|cifs|smbfs|smb3|9p|afs|ceph|ceph-fuse|fuse\.ceph|glusterfs|fuse\.glusterfs|lustre|sshfs|fuse\.sshfs|davfs|davfs2|gfs2|ocfs2|gpfs|orangefs|pvfs2)$/
-        }
-        function is_pseudo(type) {
-            return type ~ /^(proc|sysfs|cgroup|cgroup2|devpts|mqueue|pstore|debugfs|tracefs|securityfs|efivarfs|configfs|fusectl|fuse\.portal|fuse\.gvfsd-fuse|autofs|binfmt_misc|hugetlbfs|rpc_pipefs|nsfs|bpf)$/
-        }
-        is_local($3) {
-            print "local\t" $2
-            next
-        }
-        !is_remote($3) && !is_pseudo($3) && !seen_unknown[$3]++ {
-            print "unknown\t" $3
-        }
-    ' "$mounts_path" | while IFS="$(printf '\t')" read -r mount_kind mount_value; do
-        if [ "$mount_kind" = unknown ]; then
-            printf 'HEALTH_UNKNOWN_FILESYSTEM\t%s\n' "$mount_value"
-            continue
-        fi
-        escaped_mount=$mount_value
-        mount_path=$(printf '%s' "$escaped_mount" |
-            sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
-        mount_output=$(LC_ALL=C df -Pk "$mount_path" 2>/dev/null)
-        mount_status=$?
-        mount_row_found=$(printf '%s\n' "$mount_output" | awk '
-            {
-                capacity=$5
-                sub(/%$/, "", capacity)
-                if (capacity ~ /^[0-9]+$/) found=1
+    if [ -n "$mounts_path" ] && [ -r "$mounts_path" ]; then
+        # Enumerating procfs preserves distinct bind-mount paths that GNU df
+        # hides by default. It also supports BusyBox, whose df has no -l flag.
+        # Classify mounts conservatively and mark unknown types so an
+        # incomplete scan cannot falsely pass.
+        filesystem_data=$(awk '
+            function is_local(type) {
+                return type ~ /^(rootfs|ext2|ext3|ext4|xfs|btrfs|bcachefs|f2fs|vfat|exfat|ntfs|ntfs3|fuseblk|zfs|tmpfs|devtmpfs|overlay|squashfs|erofs|ramfs|ubifs|jffs2|jfs|nilfs2|reiserfs|reiser4)$/
             }
-            END { print found + 0 }
-        ')
-        if [ -n "$mount_output" ]; then
-            printf '%s\n' "$mount_output"
+            function is_remote(type) {
+                return type ~ /^(nfs|nfs4|cifs|smbfs|smb3|9p|afs|ceph|ceph-fuse|fuse\.ceph|glusterfs|fuse\.glusterfs|lustre|sshfs|fuse\.sshfs|davfs|davfs2|gfs2|ocfs2|gpfs|orangefs|pvfs2)$/
+            }
+            function is_pseudo(type) {
+                return type ~ /^(proc|sysfs|cgroup|cgroup2|devpts|mqueue|pstore|debugfs|tracefs|securityfs|efivarfs|configfs|fusectl|fuse\.portal|fuse\.gvfsd-fuse|autofs|binfmt_misc|hugetlbfs|rpc_pipefs|nsfs|bpf)$/
+            }
+            function is_writable(options) {
+                return options ~ /(^|,)rw(,|$)/
+            }
+            !is_writable($4) {
+                next
+            }
+            is_local($3) {
+                print "local\t" $2
+                next
+            }
+            !is_remote($3) && !is_pseudo($3) && !seen_unknown[$3]++ {
+                print "unknown\t" $3
+            }
+        ' "$mounts_path" | while IFS="$(printf '\t')" read -r mount_kind mount_value; do
+            if [ "$mount_kind" = unknown ]; then
+                printf 'HEALTH_UNKNOWN_FILESYSTEM\t%s\n' "$mount_value"
+                continue
+            fi
+            escaped_mount=$mount_value
+            mount_path=$(printf '%s' "$escaped_mount" |
+                sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
+            mount_output=$(LC_ALL=C df -Pk "$mount_path" 2>/dev/null)
+            mount_status=$?
+            mount_row_found=$(printf '%s\n' "$mount_output" | awk '
+                {
+                    capacity=$5
+                    sub(/%$/, "", capacity)
+                    if (capacity ~ /^[0-9]+$/) found=1
+                }
+                END { print found + 0 }
+            ')
+            if [ -n "$mount_output" ]; then
+                printf '%s\n' "$mount_output"
+            fi
+            if [ "$mount_status" -ne 0 ] || [ "$mount_row_found" -ne 1 ]; then
+                printf 'HEALTH_UNREADABLE_FILESYSTEM\t%s\n' "$mount_path"
+            fi
+        done)
+        if [ -n "$filesystem_data" ]; then
+            printf '%s\n' "$filesystem_data"
+            return 0
         fi
-        if [ "$mount_status" -ne 0 ] || [ "$mount_row_found" -ne 1 ]; then
-            printf 'HEALTH_UNREADABLE_FILESYSTEM\t%s\n' "$mount_path"
-        fi
-    done)
+    fi
+
+    filesystem_data=$(LC_ALL=C df -Pkl 2>/dev/null)
+    filesystem_status=$?
     [ -n "$filesystem_data" ] || return 1
     printf '%s\n' "$filesystem_data"
+    if [ "$filesystem_status" -ne 0 ]; then
+        printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\tdf -Pkl returned nonzero\n'
+    fi
 }
 
 check_disk()
@@ -384,17 +392,18 @@ check_disk()
             capacity=$5
             sub(/%$/, "", capacity)
             if (capacity !~ /^[0-9]+$/) next
+            capacity_number=capacity + 0
             mount_point=$6
             for (field=7; field<=NF; field++) {
                 mount_point=mount_point " " $field
             }
             if (seen_mount[mount_point]++) next
             valid++
-            if (capacity > highest) highest=capacity
-            if (capacity >= threshold) {
+            if (capacity_number > highest) highest=capacity_number
+            if (capacity_number >= threshold + 0) {
                 mount_point=clean(mount_point)
                 if (items != "") items=items ", "
-                items=items mount_point "=" capacity "%"
+                items=items mount_point "=" capacity_number "%"
                 warning++
             }
         }

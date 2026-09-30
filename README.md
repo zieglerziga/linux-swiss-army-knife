@@ -51,13 +51,14 @@ Windows exposes the same selection and output contract:
 ```
 
 The checks report elevation state, flag local filesystem mount paths over the
-configured used-space threshold, identify Linux `D`/`Z` process states or
-non-responsive Windows GUI processes, and query available updates. On POSIX
-systems the sudo check validates `sudo -n`; on Windows it reports whether the
-process is already elevated and detects `sudo` without invoking an elevation
-prompt. POSIX package
-managers use cached metadata without refreshing it. Windows uses the read-only
-Windows Update search API only when `--updates` is selected.
+configured used-space threshold, identify Linux `D`/`Z` process
+states or non-responsive Windows GUI processes, and query available updates.
+On POSIX systems the sudo check validates `sudo -n`; on Windows it reports
+whether the process is already elevated and detects `sudo` without invoking an
+elevation prompt. POSIX package managers use cached metadata without refreshing
+it. Windows uses the read-only Windows Update search API only when `--updates`
+is selected. The Linux disk scan ignores read-only mounts such as package
+images, where a reported 100% capacity is expected.
 
 Run the POSIX command on a Linux or BusyBox host without installing it:
 
