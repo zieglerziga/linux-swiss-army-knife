@@ -230,6 +230,7 @@ foreach ($check in $selected) {
                     $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-disks.tsv'
                     if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { throw 'fixture is missing: windows-disks.tsv' }
                     $lowDisks = New-Object 'System.Collections.Generic.List[string]'
+                    $validDiskCount = 0
                     foreach ($line in Get-Content -LiteralPath $fixturePath) {
                         if ([string]::IsNullOrWhiteSpace($line)) { continue }
                         $columns = $line -split "`t", 3
@@ -237,13 +238,15 @@ foreach ($check in $selected) {
                         $size = [double]::Parse($columns[1], [Globalization.CultureInfo]::InvariantCulture)
                         $free = [double]::Parse($columns[2], [Globalization.CultureInfo]::InvariantCulture)
                         if ($size -le 0 -or $free -lt 0 -or $free -gt $size) { throw 'invalid disk size or free space in fixture' }
+                        $validDiskCount++
                         $usedPercent = 100.0 * ($size - $free) / $size
                         if ($usedPercent -ge $diskWarning) {
                             $lowDisks.Add(('{0} {1}% used' -f $columns[0],
                                 $usedPercent.ToString('N1', [Globalization.CultureInfo]::InvariantCulture)))
                         }
                     }
-                    if ($lowDisks.Count -eq 0) { Add-Result $results 'disk' 'pass' ('all fixed disks are below {0}% used' -f $diskWarning) }
+                    if ($validDiskCount -eq 0) { Add-Result $results 'disk' 'unsupported' 'no fixed disks were found' }
+                    elseif ($lowDisks.Count -eq 0) { Add-Result $results 'disk' 'pass' ('all fixed disks are below {0}% used' -f $diskWarning) }
                     else { Add-Result $results 'disk' 'warn' ($lowDisks -join '; ') }
                 }
                 'processes' {
@@ -285,15 +288,18 @@ foreach ($check in $selected) {
             'disk' {
                 $lowDisks = New-Object 'System.Collections.Generic.List[string]'
                 $fixedDisks = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType = 3')
+                $validDiskCount = 0
                 foreach ($disk in $fixedDisks) {
-                    if ($null -eq $disk.Size -or [double] $disk.Size -le 0) { continue }
+                    if ($null -eq $disk.Size -or $null -eq $disk.FreeSpace -or
+                        [double] $disk.Size -le 0) { continue }
+                    $validDiskCount++
                     $usedPercent = 100.0 * ([double] $disk.Size - [double] $disk.FreeSpace) / [double] $disk.Size
                     if ($usedPercent -ge $diskWarning) {
                         $lowDisks.Add(('{0} {1}% used' -f $disk.DeviceID,
                             $usedPercent.ToString('N1', [Globalization.CultureInfo]::InvariantCulture)))
                     }
                 }
-                if ($fixedDisks.Count -eq 0) { Add-Result $results 'disk' 'unsupported' 'no fixed disks were found' }
+                if ($validDiskCount -eq 0) { Add-Result $results 'disk' 'unsupported' 'no fixed disks were found' }
                 elseif ($lowDisks.Count -eq 0) { Add-Result $results 'disk' 'pass' ('all fixed disks are below {0}% used' -f $diskWarning) }
                 else { Add-Result $results 'disk' 'warn' ($lowDisks -join '; ') }
             }

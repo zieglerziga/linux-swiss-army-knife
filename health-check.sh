@@ -338,6 +338,8 @@ filesystem_output()
             printf '%s\n' "$filesystem_data"
             return 0
         fi
+        printf '%s\n' 'HEALTH_NO_WRITABLE_FILESYSTEMS'
+        return 0
     fi
 
     filesystem_data=$(LC_ALL=C df -Pkl 2>/dev/null)
@@ -355,6 +357,10 @@ check_disk()
         emit_result disk error 'local filesystem usage could not be read'
         return
     }
+    if [ "$disk_output" = 'HEALTH_NO_WRITABLE_FILESYSTEMS' ]; then
+        emit_result disk unsupported 'no writable local filesystem paths were found'
+        return
+    fi
 
     disk_summary=$(printf '%s\n' "$disk_output" | awk -v threshold="$DISK_WARNING" '
         function clean(value) {

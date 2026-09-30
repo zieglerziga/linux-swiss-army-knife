@@ -62,6 +62,14 @@ try {
     Assert-True ($diskResult.ExitCode -eq 1) '--disk above the used-space threshold should warn'
     Assert-Lines @("disk`twarn`tC: 95.0% used") $diskResult.Output '--disk output differs'
 
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') -Value '' -NoNewline
+    $unsupportedDiskResult = Invoke-HealthCheck @('--disk', '--plain')
+    Assert-True ($unsupportedDiskResult.ExitCode -eq 1) 'unsupported disk check should exit 1'
+    Assert-Lines @("disk`tunsupported`tno fixed disks were found") `
+        $unsupportedDiskResult.Output 'unsupported disk output differs'
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') `
+        -Value "C:`t100`t5" -NoNewline
+
     $processResult = Invoke-HealthCheck @('--processes', '--plain')
     Assert-True ($processResult.ExitCode -eq 1) 'unresponsive GUI process should warn'
     Assert-Lines @("processes`twarn`tunresponsive GUI processes: Editor (PID 42)") `

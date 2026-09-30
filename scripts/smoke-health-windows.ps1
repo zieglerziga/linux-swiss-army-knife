@@ -8,14 +8,14 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $healthCheck = Join-Path $repositoryRoot 'health-check.ps1'
-$outputLines = @(& $healthCheck --plain --disk --processes)
+$outputLines = @(& $healthCheck --plain --all)
 $healthStatus = $LASTEXITCODE
 
 if ($healthStatus -gt 1) {
     throw ('health-check.ps1 returned unexpected status {0}' -f $healthStatus)
 }
-if ($outputLines.Count -ne 2) {
-    throw ('expected two health-check rows, got {0}' -f $outputLines.Count)
+if ($outputLines.Count -ne 4) {
+    throw ('expected four health-check rows, got {0}' -f $outputLines.Count)
 }
 
 $seen = @{}
@@ -24,7 +24,7 @@ foreach ($line in $outputLines) {
     if ($columns.Count -ne 3) {
         throw ('health-check row is not three-column TSV: {0}' -f $line)
     }
-    if ($columns[0] -notin @('disk', 'processes')) {
+    if ($columns[0] -notin @('sudo', 'disk', 'processes', 'updates')) {
         throw ('unexpected health-check name: {0}' -f $columns[0])
     }
     if ($columns[1] -notin @('pass', 'warn', 'unsupported')) {
@@ -32,8 +32,10 @@ foreach ($line in $outputLines) {
     }
     $seen[$columns[0]] = $true
 }
-if (-not $seen.ContainsKey('disk') -or -not $seen.ContainsKey('processes')) {
-    throw 'native health-check output omitted a selected check'
+foreach ($expectedCheck in @('sudo', 'disk', 'processes', 'updates')) {
+    if (-not $seen.ContainsKey($expectedCheck)) {
+        throw ('native health-check output omitted {0}' -f $expectedCheck)
+    }
 }
 
 $outputLines | Write-Output

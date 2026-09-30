@@ -121,6 +121,12 @@ Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/root 1000 900 100 90% /
 DF_OUTPUT
             exit 0
+        elif [ "${HEALTH_DF_READ_ONLY_ONLY:-0}" -eq 1 ]; then
+            cat <<'DF_OUTPUT'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/loop0 1000 1000 0 100% /snap/example/1
+DF_OUTPUT
+            exit 0
         fi
         exit 1
         ;;
@@ -200,7 +206,7 @@ if bind_output=$(PATH="$test_directory/df-bin:$PATH" \
     HEALTH_DF_HIDE_BIND=1 \
     HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
     --plain --disk --disk-warning 85); then
-    fail 'full bind-mount fixture unexpectedly returned success'
+    fail 'warning bind-mount fixture unexpectedly returned success'
 else
     bind_status=$?
 fi
@@ -208,6 +214,26 @@ fi
 expected_bind=$(printf 'disk\twarn\t2 local filesystem path(s) at or above 85%%: /=90%%, /bind=90%%')
 [ "$bind_output" = "$expected_bind" ] ||
     fail 'distinct bind mount paths were not reported consistently'
+
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/loop0 /snap/example/1 squashfs ro,nodev 0 0
+/dev/loop1 /media/example iso9660 ro,nodev 0 0
+MOUNTS
+read_only_output=
+if read_only_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_DF_READ_ONLY_ONLY=1 \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 85); then
+    fail 'all-read-only mount fixture unexpectedly returned success'
+else
+    read_only_status=$?
+fi
+[ "$read_only_status" -eq 1 ] ||
+    fail 'all-read-only mount fixture did not return unsupported status'
+expected_read_only=$(printf 'disk\tunsupported\tno writable local filesystem paths were found')
+[ "$read_only_output" = "$expected_read_only" ] ||
+    fail 'read-only mounts were reintroduced through global df fallback'
 
 cat >"$test_directory/mounts" <<'MOUNTS'
 /dev/root / ext4 rw 0 0
