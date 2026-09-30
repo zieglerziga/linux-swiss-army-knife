@@ -22,6 +22,8 @@ SELECTED_CHECKS=0
 HEALTH_FIXTURE_ROOT=${HEALTH_FIXTURE_ROOT:-}
 HEALTH_TEST_MOUNTS_PATH=${HEALTH_TEST_MOUNTS_PATH:-}
 HEALTH_TEST_PACKAGE_MANAGER=${HEALTH_TEST_PACKAGE_MANAGER:-}
+HEALTH_TEST_PROC_ROOT=${HEALTH_TEST_PROC_ROOT:-}
+HEALTH_TEST_PROC_MOUNTS_PATH=${HEALTH_TEST_PROC_MOUNTS_PATH:-}
 
 usage()
 {
@@ -46,8 +48,8 @@ Options:
   -h, --help          Show this help
   --version           Show the command version
 
-Package metadata is never refreshed. SSH uses the local strict host-key policy;
-the command never disables host-key verification or prompts for a password.
+Package metadata is never refreshed. Remote mode requires a verified host key
+already present in local known_hosts; unknown keys and passwords are rejected.
 EOF
 }
 
@@ -228,10 +230,11 @@ run_remote()
         fail_usage "SSH identity is not readable: $SSH_IDENTITY"
     fi
 
-    set -- -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    set -- -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+        -o ClearAllForwardings=yes \
         -o "ConnectTimeout=$SSH_TIMEOUT"
     if [ -n "$SSH_IDENTITY" ]; then
-        set -- "$@" -i "$SSH_IDENTITY"
+        set -- "$@" -o IdentitiesOnly=yes -i "$SSH_IDENTITY"
     fi
     set -- "$@" "$REMOTE_HOST" sh -s --
     [ "$CHECK_SUDO" -eq 0 ] || set -- "$@" --sudo
@@ -242,6 +245,11 @@ run_remote()
     [ "$OUTPUT_MODE" = plain ] && set -- "$@" --plain
 
     ssh "$@" <"$0"
+    remote_status=$?
+    case "$remote_status" in
+        0|1) return "$remote_status" ;;
+        *) return 2 ;;
+    esac
 }
 
 check_sudo()
@@ -473,37 +481,111 @@ process_rows()
         return
     fi
 
-    if [ -d /proc ]; then
+    process_root=$HEALTH_TEST_PROC_ROOT
+    [ -n "$process_root" ] || process_root=/proc
+    if [ -d "$process_root" ]; then
         # Keep only the small PID/state/name projection instead of retaining
         # complete process metadata in memory on large hosts.
-        for process_stat in /proc/[0-9]*/stat; do
-            [ -r "$process_stat" ] || continue
-            process_id=${process_stat%/stat}
-            process_id=${process_id##*/}
-            process_line=$(sed -n '1p' "$process_stat" 2>/dev/null) || continue
+        process_mounts_path=$HEALTH_TEST_PROC_MOUNTS_PATH
+        if [ -z "$process_mounts_path" ] && [ "$process_root" = /proc ] &&
+            [ -r /proc/mounts ]; then
+            process_mounts_path=/proc/mounts
+        fi
+        if [ -n "$process_mounts_path" ] && [ -r "$process_mounts_path" ] &&
+            awk '
+                $2 == "/proc" && $3 == "proc" {
+                    option_count=split($4, options, ",")
+                    for (option_index=1; option_index<=option_count; option_index++) {
+                        if (options[option_index] ~ /^hidepid=/ &&
+                            options[option_index] != "hidepid=0") {
+                            hidden=1
+                        }
+                    }
+                }
+                END { exit hidden ? 0 : 1 }
+            ' "$process_mounts_path"; then
+            printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
+                'procfs uses hidepid'
+        fi
+
+        process_seen=0
+        process_unreadable=0
+        for process_directory in "$process_root"/[0-9]*; do
+            [ -d "$process_directory" ] || continue
+            process_stat=$process_directory/stat
+            if [ ! -r "$process_stat" ]; then
+                [ -d "$process_directory" ] &&
+                    process_unreadable=$((process_unreadable + 1))
+                continue
+            fi
+            process_line=$(sed -n '1p' "$process_stat" 2>/dev/null)
+            process_status=$?
+            if [ "$process_status" -ne 0 ] || [ -z "$process_line" ]; then
+                [ -d "$process_directory" ] &&
+                    process_unreadable=$((process_unreadable + 1))
+                continue
+            fi
+            process_id=${process_directory##*/}
             process_tail=${process_line##*) }
             process_state=${process_tail%% *}
+            case "$process_state" in
+                [ABCDEFGHIJKLMNOPQRSTUVWXYZ]) ;;
+                *)
+                    process_unreadable=$((process_unreadable + 1))
+                    continue
+                    ;;
+            esac
             process_name=
-            if [ -r "/proc/$process_id/comm" ]; then
-                process_name=$(sed -n '1p' "/proc/$process_id/comm" 2>/dev/null)
+            if [ -r "$process_directory/comm" ]; then
+                process_name=$(sed -n '1p' "$process_directory/comm" 2>/dev/null)
             fi
             printf '%s\t%s\t%s\n' "$process_id" "$process_state" "$process_name"
+            process_seen=$((process_seen + 1))
         done
+        if [ "$process_unreadable" -gt 0 ]; then
+            printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%d unreadable process entr' \
+                "$process_unreadable"
+            if [ "$process_unreadable" -eq 1 ]; then
+                printf '%s\n' 'y'
+            else
+                printf '%s\n' 'ies'
+            fi
+        fi
+        if [ "$process_seen" -eq 0 ]; then
+            printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
+                'no readable process entries'
+        fi
         return
     fi
 
     command -v ps >/dev/null 2>&1 || return 1
-    if ps -eo pid=,stat=,etime=,comm= >/dev/null 2>&1; then
-        ps -eo pid=,stat=,etime=,comm= 2>/dev/null |
-            awk '{ print $1 "\t" $2 "\t" $4 }'
-    elif ps -axo pid=,stat=,etime=,comm= >/dev/null 2>&1; then
-        ps -axo pid=,stat=,etime=,comm= 2>/dev/null |
-            awk '{ print $1 "\t" $2 "\t" $4 }'
-    elif ps -o pid= -o stat= -o etime= -o comm= >/dev/null 2>&1; then
-        ps -o pid= -o stat= -o etime= -o comm= 2>/dev/null |
-            awk '{ print $1 "\t" $2 "\t" $4 }'
+    process_output=$(ps -eo pid=,stat=,etime=,comm= 2>/dev/null)
+    process_status=$?
+    if [ "$process_status" -ne 0 ] || [ -z "$process_output" ]; then
+        process_output=$(ps -axo pid=,stat=,etime=,comm= 2>/dev/null)
+        process_status=$?
+    fi
+    if [ "$process_status" -ne 0 ] || [ -z "$process_output" ]; then
+        process_output=$(ps -o pid= -o stat= -o etime= -o comm= 2>/dev/null)
+        process_status=$?
+        process_ps_incomplete=1
     else
-        return 1
+        process_ps_incomplete=0
+    fi
+    [ "$process_status" -eq 0 ] && [ -n "$process_output" ] || return 1
+    process_formatted=$(printf '%s\n' "$process_output" |
+        awk '
+            $1 ~ /^[0-9]+$/ && $2 ~ /^[[:alpha:]]/ {
+                print $1 "\t" $2 "\t" $4
+                found=1
+            }
+            END { if (!found) exit 1 }
+        ') || return 1
+    [ -n "$process_formatted" ] || return 1
+    printf '%s\n' "$process_formatted"
+    if [ "$process_ps_incomplete" -eq 1 ]; then
+        printf 'HEALTH_INCOMPLETE_PROCESS_SCAN\t%s\n' \
+            'ps could not request all processes'
     fi
 }
 
@@ -515,26 +597,43 @@ check_processes()
     }
 
     process_summary=$(printf '%s\n' "$processes_output" | awk '
+        $1 == "HEALTH_INCOMPLETE_PROCESS_SCAN" {
+            detail=$2
+            for (field=3; field<=NF; field++) detail=detail " " $field
+            if (!seen_incomplete[detail]++) {
+                if (incomplete != "") incomplete=incomplete "; "
+                incomplete=incomplete detail
+            }
+            next
+        }
         $2 ~ /^[DZ]/ {
             count++
             if (listed < 10) {
                 if (items != "") items=items ", "
                 name=$3
                 if (name == "") name="unknown"
+                gsub(/[|\t\r\n]/, " ", name)
                 items=items $1 ":" $2 ":" name
                 listed++
             }
         }
-        END { printf "%d|%s", count, items }
+        END { printf "%d|%s|%s", count, items, incomplete }
     ')
     process_count=${process_summary%%|*}
-    process_items=${process_summary#*|}
+    process_remaining=${process_summary#*|}
+    process_items=${process_remaining%%|*}
+    process_incomplete=${process_remaining#*|}
 
     if [ "$process_count" -gt 0 ]; then
         process_suffix=
         [ "$process_count" -le 10 ] || process_suffix=' (first 10 shown)'
-        emit_result processes warn \
-            "$process_count process(es) in D or Z state: $process_items$process_suffix"
+        process_detail="$process_count process(es) in D or Z state: $process_items$process_suffix"
+        if [ -n "$process_incomplete" ]; then
+            process_detail="$process_detail; scan incomplete: $process_incomplete"
+        fi
+        emit_result processes warn "$process_detail"
+    elif [ -n "$process_incomplete" ]; then
+        emit_result processes unsupported "process scan incomplete: $process_incomplete"
     else
         emit_result processes pass 'no processes are in uninterruptible or zombie states'
     fi

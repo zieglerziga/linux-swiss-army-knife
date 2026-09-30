@@ -5,9 +5,33 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:ProgramVersion = '0.1.0'
 
 function Write-Usage {
-    Write-Output 'Usage: health-check.ps1 [--sudo] [--disk] [--processes] [--updates] [--all] [--plain] [--disk-warning PERCENT] [--remote USER@HOST] [--identity PATH] [--connect-timeout SECONDS] [--help]'
+    @(
+        'Usage: health-check.ps1 CHECK [CHECK ...] [OPTIONS]',
+        '',
+        'Run explicitly selected system health checks.',
+        '',
+        'Checks:',
+        '  --sudo              Detect administrator or sudo availability',
+        '  --disk              Report fixed disks over a usage threshold',
+        '  --processes         Detect non-responsive GUI processes',
+        '  --updates           Search for applicable Windows updates',
+        '  --all               Run all four checks',
+        '',
+        'Options:',
+        '  --plain             Stable tab-separated output: check, status, detail',
+        '  --disk-warning N    Warn when disk use is N percent or higher (default: 85)',
+        '  --remote USER@HOST  Stream health-check.sh to a POSIX host over SSH',
+        '  --identity PATH     SSH private key for --remote',
+        '  --connect-timeout N SSH connection timeout in seconds (default: 10)',
+        '  -h, --help          Show this help',
+        '  --version           Show the command version',
+        '',
+        'Remote mode requires a verified host key already present in local known_hosts;',
+        'unknown keys and passwords are rejected.'
+    )
 }
 
 function Write-Check {
@@ -113,10 +137,11 @@ function Invoke-Remote {
         return 1
     }
 
-    $sshArguments = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+    $sshArguments = @('-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+        '-o', 'ClearAllForwardings=yes',
         '-o', ('ConnectTimeout={0}' -f $ConnectTimeout))
     if (-not [string]::IsNullOrWhiteSpace($Identity)) {
-        $sshArguments += @('-i', $Identity)
+        $sshArguments += @('-o', 'IdentitiesOnly=yes', '-i', $Identity)
     }
     $sshArguments += $Remote
 
@@ -138,6 +163,7 @@ function Invoke-Remote {
 $selected = New-Object 'System.Collections.Generic.List[string]'
 $plain = $false
 $help = $false
+$version = $false
 $all = $false
 $remote = ''
 $identity = ''
@@ -155,7 +181,9 @@ for ($index = 0; $index -lt $Arguments.Count; $index++) {
         '--updates' { $selected.Add('updates'); continue }
         '--all' { $all = $true; continue }
         '--plain' { $plain = $true; continue }
+        '-h' { $help = $true; continue }
         '--help' { $help = $true; continue }
+        '--version' { $version = $true; continue }
         '--disk-warning' {
             $index++
             if ($index -ge $Arguments.Count -or $Arguments[$index] -notmatch '^\d+$') {
@@ -226,6 +254,10 @@ if (-not [string]::IsNullOrEmpty($parseError)) {
 }
 if ($help) {
     Write-Usage
+    exit 0
+}
+if ($version) {
+    Write-Output ('health-check.ps1 {0}' -f $script:ProgramVersion)
     exit 0
 }
 if ($all) {

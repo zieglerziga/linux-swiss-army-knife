@@ -75,8 +75,10 @@ script to a Linux, macOS, or BusyBox target:
 .\health-check.ps1 --remote user@example.test --identity $HOME\.ssh\example --disk
 ```
 
-Remote mode streams the script over batch-mode SSH, preserves the local strict
-host-key policy, and never enables password login or disables host-key checks.
+Remote mode streams the script over batch-mode SSH and requires the target's
+verified host key to already be present in local `known_hosts`; unknown keys are
+rejected without prompting. Verify the fingerprint out of band before adding a
+new host key. Password login and SSH forwarding are disabled for the check.
 Default output uses `[PASS]`, `[WARN]`, `[FAIL]`, `[UNSUPPORTED]`, or `[ERROR]`.
 `--plain` emits stable `check<TAB>status<TAB>detail` rows. Exit status is `0` for
 all-pass, `1` for warnings or unsupported checks, and `2` for errors or invalid

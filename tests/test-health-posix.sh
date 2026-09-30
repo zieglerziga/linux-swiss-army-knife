@@ -73,6 +73,71 @@ fi
 expected_process=$(printf 'processes\twarn\t2 process(es) in D or Z state: 101:D:blocked-worker, 202:Z:zombie-child')
 [ "$process_output" = "$expected_process" ] || fail 'process output is not exact'
 
+mkdir -p "$test_directory/proc-hide/100"
+printf '%s\n' '100 (worker) S 0 0 0' >"$test_directory/proc-hide/100/stat"
+printf '%s\n' 'worker' >"$test_directory/proc-hide/100/comm"
+printf '%s\n' 'proc /proc proc rw,hidepid=2 0 0' >"$test_directory/proc-hide-mounts"
+hidepid_output=
+if hidepid_output=$(HEALTH_TEST_PROC_ROOT="$test_directory/proc-hide" \
+    HEALTH_TEST_PROC_MOUNTS_PATH="$test_directory/proc-hide-mounts" \
+    run_health_check --plain --processes); then
+    fail 'hidepid process scan unexpectedly passed'
+else
+    hidepid_status=$?
+fi
+[ "$hidepid_status" -eq 1 ] || fail 'hidepid process scan did not return unsupported status'
+expected_hidepid=$(printf 'processes\tunsupported\tprocess scan incomplete: procfs uses hidepid')
+[ "$hidepid_output" = "$expected_hidepid" ] ||
+    fail 'hidepid process scan incompleteness was not reported'
+
+mkdir -p "$test_directory/proc-partial/100" "$test_directory/proc-partial/101"
+printf '%s\n' '100 (blocked-worker) D 0 0 0' >"$test_directory/proc-partial/100/stat"
+printf '%s\n' 'blocked-worker' >"$test_directory/proc-partial/100/comm"
+partial_process_output=
+if partial_process_output=$(HEALTH_TEST_PROC_ROOT="$test_directory/proc-partial" \
+    run_health_check --plain --processes); then
+    fail 'partial process scan unexpectedly passed'
+else
+    partial_process_status=$?
+fi
+[ "$partial_process_status" -eq 1 ] ||
+    fail 'partial process scan did not preserve warning status'
+expected_partial_process=$(printf 'processes\twarn\t1 process(es) in D or Z state: 100:D:blocked-worker; scan incomplete: 1 unreadable process entry')
+[ "$partial_process_output" = "$expected_partial_process" ] ||
+    fail 'partial process scan did not preserve known stuck-process details'
+
+mkdir "$test_directory/ps-bin"
+cat >"$test_directory/ps-bin/ps" <<'MOCK_PS'
+#!/bin/sh
+printf '%s\n' '42 D 00:10 worker'
+[ "${HEALTH_PS_FAILURE:-0}" -eq 0 ] || exit 7
+MOCK_PS
+chmod +x "$test_directory/ps-bin/ps"
+ps_output=
+if ps_output=$(PATH="$test_directory/ps-bin:$PATH" \
+    HEALTH_TEST_PROC_ROOT="$test_directory/missing-proc" \
+    run_health_check --plain --processes); then
+    fail 'mock ps stuck-process scan unexpectedly passed'
+else
+    ps_status=$?
+fi
+[ "$ps_status" -eq 1 ] || fail 'mock ps stuck-process scan did not warn'
+expected_ps=$(printf 'processes\twarn\t1 process(es) in D or Z state: 42:D:worker')
+[ "$ps_output" = "$expected_ps" ] || fail 'mock ps output was parsed incorrectly'
+
+ps_failure_output=
+if ps_failure_output=$(PATH="$test_directory/ps-bin:$PATH" HEALTH_PS_FAILURE=1 \
+    HEALTH_TEST_PROC_ROOT="$test_directory/missing-proc" \
+    run_health_check --plain --processes); then
+    fail 'failed ps enumeration unexpectedly passed'
+else
+    ps_failure_status=$?
+fi
+[ "$ps_failure_status" -eq 1 ] || fail 'failed ps enumeration did not return unsupported status'
+expected_ps_failure=$(printf 'processes\tunsupported\tprocess states are unavailable on this platform')
+[ "$ps_failure_output" = "$expected_ps_failure" ] ||
+    fail 'failed ps enumeration was treated as complete'
+
 all_output=
 if all_output=$(HEALTH_FIXTURE_ROOT=$fixture_root run_health_check --plain --all); then
     fail 'warning fixture set unexpectedly returned success'
@@ -411,6 +476,7 @@ mkdir "$test_directory/bin"
 cat >"$test_directory/bin/ssh" <<'MOCK_SSH'
 #!/bin/sh
 printf '%s\n' "$@" >"$HEALTH_SSH_CAPTURE"
+[ "${HEALTH_SSH_STATUS:-0}" -eq 0 ] || exit "$HEALTH_SSH_STATUS"
 grep -q '^Usage: health-check.sh' || exit 91
 printf 'disk\tpass\tmock remote disk output\n'
 MOCK_SSH
@@ -421,10 +487,14 @@ remote_output=$(PATH="$test_directory/bin:$PATH" \
     fail 'mock SSH execution failed'
 expected_remote=$(printf 'disk\tpass\tmock remote disk output')
 [ "$remote_output" = "$expected_remote" ] || fail 'remote output was changed locally'
+grep -qx -- '-T' "$test_directory/ssh-arguments.txt" ||
+    fail 'remote execution did not disable terminal allocation'
 grep -qx 'BatchMode=yes' "$test_directory/ssh-arguments.txt" ||
     fail 'remote execution did not require batch mode'
 grep -qx 'StrictHostKeyChecking=yes' "$test_directory/ssh-arguments.txt" ||
     fail 'remote execution did not require strict host-key checking'
+grep -qx 'ClearAllForwardings=yes' "$test_directory/ssh-arguments.txt" ||
+    fail 'remote execution did not disable configured SSH forwarding'
 grep -qx 'user@example.test' "$test_directory/ssh-arguments.txt" ||
     fail 'remote destination was not passed exactly'
 grep -qx -- '--disk' "$test_directory/ssh-arguments.txt" ||
@@ -432,6 +502,32 @@ grep -qx -- '--disk' "$test_directory/ssh-arguments.txt" ||
 if grep -qi 'StrictHostKeyChecking=no' "$test_directory/ssh-arguments.txt"; then
     fail 'remote execution disabled strict host-key checking'
 fi
+
+: >"$test_directory/mock-identity"
+identity_remote_output=$(PATH="$test_directory/bin:$PATH" \
+    HEALTH_SSH_CAPTURE="$test_directory/ssh-arguments.txt" \
+    run_health_check --plain --disk --remote user@example.test \
+    --identity "$test_directory/mock-identity") ||
+    fail 'mock SSH identity execution failed'
+[ "$identity_remote_output" = "$expected_remote" ] ||
+    fail 'identity-based remote output was changed locally'
+grep -qx 'IdentitiesOnly=yes' "$test_directory/ssh-arguments.txt" ||
+    fail 'explicit SSH identity did not disable implicit identities'
+grep -qx "$test_directory/mock-identity" "$test_directory/ssh-arguments.txt" ||
+    fail 'explicit SSH identity path was not passed exactly'
+
+for ssh_failure in 255 7; do
+    if PATH="$test_directory/bin:$PATH" HEALTH_SSH_STATUS=$ssh_failure \
+        HEALTH_SSH_CAPTURE="$test_directory/ssh-arguments.txt" \
+        run_health_check --plain --disk --remote user@example.test \
+        >"$test_directory/ssh-failure.out"; then
+        fail "SSH status $ssh_failure unexpectedly succeeded"
+    else
+        ssh_failure_status=$?
+    fi
+    [ "$ssh_failure_status" -eq 2 ] ||
+        fail "SSH status $ssh_failure was not normalized to error status"
+done
 
 compatibility_output=$(HEALTH_FIXTURE_ROOT=$fixture_root \
     sh "$repository_root/pc_healt_check.sh" --plain --sudo \

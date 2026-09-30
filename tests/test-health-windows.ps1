@@ -131,8 +131,39 @@ try {
 
     $helpResult = Invoke-HealthCheck @('--help')
     Assert-True ($helpResult.ExitCode -eq 0) '--help should exit 0'
-    Assert-Lines @('Usage: health-check.ps1 [--sudo] [--disk] [--processes] [--updates] [--all] [--plain] [--disk-warning PERCENT] [--remote USER@HOST] [--identity PATH] [--connect-timeout SECONDS] [--help]') `
-        $helpResult.Output '--help output differs'
+    $expectedHelp = @(
+        'Usage: health-check.ps1 CHECK [CHECK ...] [OPTIONS]',
+        '',
+        'Run explicitly selected system health checks.',
+        '',
+        'Checks:',
+        '  --sudo              Detect administrator or sudo availability',
+        '  --disk              Report fixed disks over a usage threshold',
+        '  --processes         Detect non-responsive GUI processes',
+        '  --updates           Search for applicable Windows updates',
+        '  --all               Run all four checks',
+        '',
+        'Options:',
+        '  --plain             Stable tab-separated output: check, status, detail',
+        '  --disk-warning N    Warn when disk use is N percent or higher (default: 85)',
+        '  --remote USER@HOST  Stream health-check.sh to a POSIX host over SSH',
+        '  --identity PATH     SSH private key for --remote',
+        '  --connect-timeout N SSH connection timeout in seconds (default: 10)',
+        '  -h, --help          Show this help',
+        '  --version           Show the command version',
+        '',
+        'Remote mode requires a verified host key already present in local known_hosts;',
+        'unknown keys and passwords are rejected.'
+    )
+    Assert-Lines $expectedHelp $helpResult.Output '--help output differs'
+
+    $shortHelpResult = Invoke-HealthCheck @('-h')
+    Assert-True ($shortHelpResult.ExitCode -eq 0) '-h should exit 0'
+    Assert-Lines $expectedHelp $shortHelpResult.Output '-h output differs'
+
+    $versionResult = Invoke-HealthCheck @('--version')
+    Assert-True ($versionResult.ExitCode -eq 0) '--version should exit 0'
+    Assert-Lines @('health-check.ps1 0.1.0') $versionResult.Output '--version output differs'
 
     Write-Output ('Windows health-check tests passed under PowerShell {0}.' -f $PSVersionTable.PSVersion)
 }
