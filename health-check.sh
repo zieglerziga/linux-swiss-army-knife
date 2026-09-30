@@ -290,13 +290,32 @@ filesystem_output()
     fi
     [ -n "$mounts_path" ] && [ -r "$mounts_path" ] || return 1
 
-    # BusyBox df has no local-only flag. Resolve an allowlisted set of local
-    # mount types from procfs and query only those mount points.
+    # BusyBox df has no local-only flag. Classify procfs mounts conservatively:
+    # query known local types, skip known remote/pseudo types, and carry an
+    # explicit marker for anything unknown so the result cannot falsely pass.
     filesystem_data=$(awk '
-        $3 ~ /^(rootfs|ext2|ext3|ext4|xfs|btrfs|f2fs|vfat|exfat|ntfs|ntfs3|zfs|tmpfs|devtmpfs|overlay|squashfs|erofs|ramfs|ubifs|jffs2)$/ {
-            print $2
+        function is_local(type) {
+            return type ~ /^(rootfs|ext2|ext3|ext4|xfs|btrfs|bcachefs|f2fs|vfat|exfat|ntfs|ntfs3|fuseblk|zfs|tmpfs|devtmpfs|overlay|squashfs|erofs|ramfs|ubifs|jffs2|jfs|nilfs2|reiserfs|reiser4)$/
         }
-    ' "$mounts_path" | while IFS= read -r escaped_mount; do
+        function is_remote(type) {
+            return type ~ /^(nfs|nfs4|cifs|smbfs|smb3|9p|afs|ceph|ceph-fuse|fuse\.ceph|glusterfs|fuse\.glusterfs|lustre|sshfs|fuse\.sshfs|davfs|davfs2|gfs2|ocfs2|gpfs|orangefs|pvfs2)$/
+        }
+        function is_pseudo(type) {
+            return type ~ /^(proc|sysfs|cgroup|cgroup2|devpts|mqueue|pstore|debugfs|tracefs|securityfs|efivarfs|configfs|fusectl|fuse\.portal|fuse\.gvfsd-fuse|autofs|binfmt_misc|hugetlbfs|rpc_pipefs|nsfs|bpf)$/
+        }
+        is_local($3) {
+            print "local\t" $2
+            next
+        }
+        !is_remote($3) && !is_pseudo($3) && !seen_unknown[$3]++ {
+            print "unknown\t" $3
+        }
+    ' "$mounts_path" | while IFS="$(printf '\t')" read -r mount_kind mount_value; do
+        if [ "$mount_kind" = unknown ]; then
+            printf 'HEALTH_UNKNOWN_FILESYSTEM\t%s\n' "$mount_value"
+            continue
+        fi
+        escaped_mount=$mount_value
         mount_path=$(printf '%s' "$escaped_mount" |
             sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
         LC_ALL=C df -Pk "$mount_path" 2>/dev/null || true
@@ -318,36 +337,53 @@ check_disk()
             return value
         }
         {
+            if ($1 == "HEALTH_UNKNOWN_FILESYSTEM") {
+                if (unknown_types != "") unknown_types=unknown_types ","
+                unknown_types=unknown_types $2
+                next
+            }
             capacity=$5
             sub(/%$/, "", capacity)
             if (capacity !~ /^[0-9]+$/) next
+            mount_point=$6
+            for (field=7; field<=NF; field++) {
+                mount_point=mount_point " " $field
+            }
+            if (seen_mount[mount_point]++) next
             valid++
             if (capacity > highest) highest=capacity
             if (capacity >= threshold) {
-                mount_point=$6
-                for (field=7; field<=NF; field++) {
-                    mount_point=mount_point " " $field
-                }
                 mount_point=clean(mount_point)
                 if (items != "") items=items ", "
                 items=items mount_point "=" capacity "%"
                 warning++
             }
         }
-        END { printf "%d|%d|%d|%s", valid, highest, warning, items }
+        END { printf "%d|%d|%d|%s|%s", valid, highest, warning, items, unknown_types }
     ')
     disk_valid=${disk_summary%%|*}
     disk_remaining=${disk_summary#*|}
     disk_highest=${disk_remaining%%|*}
     disk_remaining=${disk_remaining#*|}
     disk_warning_count=${disk_remaining%%|*}
-    disk_items=${disk_remaining#*|}
+    disk_remaining=${disk_remaining#*|}
+    disk_items=${disk_remaining%%|*}
+    disk_unknown_types=${disk_remaining#*|}
 
-    if [ "$disk_valid" -eq 0 ]; then
+    if [ "$disk_valid" -eq 0 ] && [ -n "$disk_unknown_types" ]; then
+        emit_result disk unsupported \
+            "mounted filesystem type(s) could not be classified: $disk_unknown_types"
+    elif [ "$disk_valid" -eq 0 ]; then
         emit_result disk error 'filesystem output contained no usable capacity rows'
     elif [ "$disk_warning_count" -gt 0 ]; then
-        emit_result disk warn \
-            "$disk_warning_count filesystem(s) at or above $DISK_WARNING%: $disk_items"
+        disk_detail="$disk_warning_count filesystem(s) at or above $DISK_WARNING%: $disk_items"
+        if [ -n "$disk_unknown_types" ]; then
+            disk_detail="$disk_detail; unclassified type(s): $disk_unknown_types"
+        fi
+        emit_result disk warn "$disk_detail"
+    elif [ -n "$disk_unknown_types" ]; then
+        emit_result disk unsupported \
+            "known local filesystems are below $DISK_WARNING%, but mounted type(s) could not be classified: $disk_unknown_types"
     else
         emit_result disk pass \
             "highest local filesystem use is $disk_highest%; warning threshold is $DISK_WARNING%"

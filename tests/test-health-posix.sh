@@ -103,6 +103,12 @@ Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/root 1000 900 100 90% /
 DF_OUTPUT
         ;;
+    *' /media/ntfs '*)
+        cat <<'DF_OUTPUT'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/ntfs 1000 960 40 96% /media/ntfs
+DF_OUTPUT
+        ;;
     *)
         printf '%s\n' 'mock df received an unexpected mount' >&2
         exit 9
@@ -125,6 +131,47 @@ if grep -q '/remote' "$test_directory/df-arguments.txt"; then
     fail 'BusyBox df fallback queried a network mount'
 fi
 
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/root / ext4 rw 0 0
+/dev/ntfs /media/ntfs fuseblk rw 0 0
+server:/share /remote nfs rw 0 0
+MOUNTS
+fuse_disk_output=
+if fuse_disk_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 95); then
+    fail 'nearly full fuseblk fixture unexpectedly returned success'
+else
+    fuse_disk_status=$?
+fi
+[ "$fuse_disk_status" -eq 1 ] || fail 'fuseblk warning did not return status 1'
+expected_fuse_disk=$(printf 'disk\twarn\t1 filesystem(s) at or above 95%%: /media/ntfs=96%%')
+[ "$fuse_disk_output" = "$expected_fuse_disk" ] ||
+    fail 'fuseblk filesystem was not included in disk results'
+if grep -q '/remote' "$test_directory/df-arguments.txt"; then
+    fail 'network mount was queried alongside fuseblk'
+fi
+
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/root / ext4 rw 0 0
+/dev/mystery /mystery mysteryfs rw 0 0
+MOUNTS
+unknown_disk_output=
+if unknown_disk_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 95); then
+    fail 'unclassified filesystem fixture unexpectedly passed'
+else
+    unknown_disk_status=$?
+fi
+[ "$unknown_disk_status" -eq 1 ] ||
+    fail 'unclassified filesystem did not return unsupported status'
+expected_unknown_disk=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but mounted type(s) could not be classified: mysteryfs')
+[ "$unknown_disk_output" = "$expected_unknown_disk" ] ||
+    fail 'unclassified filesystem was silently omitted'
+
 mkdir "$test_directory/package-bin"
 cat >"$test_directory/package-bin/package-mock" <<'PACKAGE_MOCK'
 #!/bin/sh
@@ -133,6 +180,9 @@ printf '%s\t%s\t%s\n' "$manager" "${HOMEBREW_NO_AUTO_UPDATE:-}" "$*" \
     >>"$HEALTH_PACKAGE_CAPTURE"
 if [ "${HEALTH_PACKAGE_FAILURE:-0}" -eq 1 ]; then
     exit 7
+fi
+if [ "${HEALTH_PACKAGE_EMPTY:-0}" -eq 1 ]; then
+    exit 0
 fi
 case "$manager" in
     apt-get) printf '%s\n' 'Inst sample [1] (2 repository)' ;;
@@ -187,6 +237,15 @@ fi
 expected_package_failure=$(printf 'updates\terror\tpacman could not query cached update metadata')
 [ "$package_failure_output" = "$expected_package_failure" ] ||
     fail 'failed pacman query was not reported as an error'
+
+package_empty_output=$(PATH="$test_directory/package-bin:$PATH" \
+    HEALTH_TEST_PACKAGE_MANAGER=pacman HEALTH_PACKAGE_EMPTY=1 \
+    HEALTH_PACKAGE_CAPTURE="$test_directory/package-arguments.txt" \
+    run_health_check --plain --updates) ||
+    fail 'empty successful pacman query did not pass'
+expected_package_empty=$(printf 'updates\tpass\tno cached package updates are available via pacman')
+[ "$package_empty_output" = "$expected_package_empty" ] ||
+    fail 'zero-update pacman output is not exact'
 
 mkdir "$test_directory/bin"
 cat >"$test_directory/bin/ssh" <<'MOCK_SSH'
