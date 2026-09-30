@@ -129,6 +129,63 @@ try {
     $invalidTimeoutResult = Invoke-HealthCheck @('--sudo', '--connect-timeout', '0')
     Assert-True ($invalidTimeoutResult.ExitCode -eq 2) 'invalid connection timeouts should be usage errors'
 
+    $mockSshPath = Join-Path $fixtureRoot 'ssh.cmd'
+    Set-Content -LiteralPath $mockSshPath -Encoding ASCII -Value @(
+        '@echo off',
+        'echo %* >"%HEALTH_SSH_CAPTURE%"',
+        'findstr /C:"Usage: health-check.sh" >nul',
+        'if errorlevel 1 exit /b 91',
+        'if defined HEALTH_SSH_STATUS exit /b %HEALTH_SSH_STATUS%',
+        "echo disk`tpass`tmock remote disk output",
+        'exit /b 0'
+    )
+    $mockIdentityPath = Join-Path $fixtureRoot 'mock identity'
+    Set-Content -LiteralPath $mockIdentityPath -Value 'fixture only' -NoNewline
+    $sshCapturePath = Join-Path $fixtureRoot 'ssh-arguments.txt'
+    $previousPath = $env:PATH
+    $previousSshCapture = $env:HEALTH_SSH_CAPTURE
+    $previousSshStatus = $env:HEALTH_SSH_STATUS
+    try {
+        $env:PATH = $fixtureRoot + [IO.Path]::PathSeparator + $env:PATH
+        $env:HEALTH_SSH_CAPTURE = $sshCapturePath
+        Remove-Item Env:HEALTH_SSH_STATUS -ErrorAction SilentlyContinue
+
+        $remoteResult = Invoke-HealthCheck @('--disk', '--plain', '--disk-warning', '91',
+            '--remote', 'user@example.test', '--identity', $mockIdentityPath,
+            '--connect-timeout', '17')
+        Assert-True ($remoteResult.ExitCode -eq 0) 'mock SSH execution should pass'
+        Assert-Lines @("disk`tpass`tmock remote disk output") $remoteResult.Output `
+            'mock SSH output differs'
+
+        $sshArguments = Get-Content -LiteralPath $sshCapturePath -Raw
+        foreach ($requiredArgument in @('-T', 'BatchMode=yes', 'StrictHostKeyChecking=yes',
+                'ClearAllForwardings=yes', 'IdentitiesOnly=yes', 'ConnectTimeout=17',
+                $mockIdentityPath, 'user@example.test', 'sh -s -- --disk --plain',
+                '--disk-warning 91')) {
+            Assert-True ($sshArguments.Contains($requiredArgument)) `
+                ('mock SSH arguments omitted: {0}' -f $requiredArgument)
+        }
+
+        foreach ($sshFailureCode in @(255, 7)) {
+            $env:HEALTH_SSH_STATUS = [string] $sshFailureCode
+            $sshFailureResult = Invoke-HealthCheck @('--disk', '--plain',
+                '--remote', 'user@example.test')
+            Assert-True ($sshFailureResult.ExitCode -eq 2) `
+                ('SSH status {0} should map to exit 2' -f $sshFailureCode)
+        }
+    }
+    finally {
+        $env:PATH = $previousPath
+        if ($null -eq $previousSshCapture) {
+            Remove-Item Env:HEALTH_SSH_CAPTURE -ErrorAction SilentlyContinue
+        }
+        else { $env:HEALTH_SSH_CAPTURE = $previousSshCapture }
+        if ($null -eq $previousSshStatus) {
+            Remove-Item Env:HEALTH_SSH_STATUS -ErrorAction SilentlyContinue
+        }
+        else { $env:HEALTH_SSH_STATUS = $previousSshStatus }
+    }
+
     $helpResult = Invoke-HealthCheck @('--help')
     Assert-True ($helpResult.ExitCode -eq 0) '--help should exit 0'
     $expectedHelp = @(
