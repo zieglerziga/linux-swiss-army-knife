@@ -323,7 +323,12 @@ fix any new native-platform findings before merge.
   file readable. This proved macOS Bash 3.2 retained `SWISS_TEST_PLATFORM` from
   the preceding function-scoped adapter assignment; the Linux route collector
   had not run. Commit `50d7e27` pins the Linux adapter explicitly for both
-  Linux-only fixtures. Hosted CI for this head is pending push.
+  Linux-only fixtures.
+- Exact implementation/test head
+  `796c63d2f87d62f383d44ca5da2fe6de8df34905` ran as
+  [GitHub Actions run 36641003196](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36641003196).
+  All 18 Linux, macOS, and Windows jobs passed, including live native smokes,
+  both Windows PowerShell editions, and all six macOS fixture/native rows.
 
 ### Branch and commit
 
@@ -333,7 +338,6 @@ fix any new native-platform findings before merge.
 - Portable route-flag follow-up: `f26d885`
 - Portable shell route parser: `ec82d4e`
 - Linux fixture adapter pin: `50d7e27`
-- This status update: `uncommitted`
 
 ### Safe next step
 
