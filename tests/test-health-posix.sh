@@ -42,7 +42,7 @@ else
     disk_status=$?
 fi
 [ "$disk_status" -eq 1 ] || fail 'disk warning did not return exit status 1'
-expected_disk=$(printf 'disk\twarn\t1 filesystem(s) at or above 85%%: /=90%%')
+expected_disk=$(printf 'disk\twarn\t1 local filesystem path(s) at or above 85%%: /=90%%')
 [ "$disk_output" = "$expected_disk" ] || fail 'disk warning output is not exact'
 
 disk_pass=$(HEALTH_FIXTURE_ROOT=$fixture_root run_health_check \
@@ -125,6 +125,12 @@ Filesystem 1024-blocks Used Available Capacity Mounted on
 DF_OUTPUT
         exit 9
         ;;
+    *' /bind '*)
+        cat <<'DF_OUTPUT'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root 1000 900 100 90% /bind
+DF_OUTPUT
+        ;;
     *)
         printf '%s\n' 'mock df received an unexpected mount' >&2
         exit 9
@@ -140,7 +146,7 @@ partial_df_output=$(PATH="$test_directory/df-bin:$PATH" \
     HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
     HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
     --plain --disk --disk-warning 95) ||
-    fail 'usable df output was discarded because df returned non-zero'
+    fail 'procfs fallback did not recover from unsupported df -l syntax'
 [ "$partial_df_output" = "$expected_disk_pass" ] ||
     fail 'partial-success df output was parsed incorrectly'
 if grep -q '/remote' "$test_directory/df-arguments.txt"; then
@@ -158,9 +164,27 @@ else
 fi
 [ "$global_partial_status" -eq 1 ] ||
     fail 'partial local-only df output did not return unsupported status'
-expected_global_partial=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: query failure(s): df-local-only')
+expected_global_partial=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: query failure(s): df -Pkl returned nonzero')
 [ "$global_partial_output" = "$expected_global_partial" ] ||
     fail 'partial local-only df output was treated as complete'
+
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/root / ext4 rw 0 0
+/dev/root /bind ext4 rw,bind 0 0
+MOUNTS
+bind_output=
+if bind_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 85); then
+    fail 'full bind-mount fixture unexpectedly returned success'
+else
+    bind_status=$?
+fi
+[ "$bind_status" -eq 1 ] || fail 'bind-mount warnings did not return status 1'
+expected_bind=$(printf 'disk\twarn\t2 local filesystem path(s) at or above 85%%: /=90%%, /bind=90%%')
+[ "$bind_output" = "$expected_bind" ] ||
+    fail 'distinct bind mount paths were not reported consistently'
 
 cat >"$test_directory/mounts" <<'MOUNTS'
 /dev/root / ext4 rw 0 0
@@ -177,7 +201,7 @@ else
     fuse_disk_status=$?
 fi
 [ "$fuse_disk_status" -eq 1 ] || fail 'fuseblk warning did not return status 1'
-expected_fuse_disk=$(printf 'disk\twarn\t1 filesystem(s) at or above 95%%: /media/ntfs=96%%')
+expected_fuse_disk=$(printf 'disk\twarn\t1 local filesystem path(s) at or above 95%%: /media/ntfs=96%%')
 [ "$fuse_disk_output" = "$expected_fuse_disk" ] ||
     fail 'fuseblk filesystem was not included in disk results'
 if grep -q '/remote' "$test_directory/df-arguments.txt"; then

@@ -32,7 +32,7 @@ Run explicitly selected system health checks.
 
 Checks:
   --sudo              Detect root or non-interactive sudo access
-  --disk              Report local filesystems at or above a usage threshold
+  --disk              Report distinct local filesystem paths over a usage threshold
   --processes         Detect processes in uninterruptible or zombie states
   --updates           Check cached package metadata for available updates
   --all               Run all four checks
@@ -277,7 +277,7 @@ filesystem_output()
     if [ -n "$filesystem_data" ]; then
         printf '%s\n' "$filesystem_data"
         if [ "$filesystem_status" -ne 0 ]; then
-            printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\tdf-local-only\n'
+            printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\tdf -Pkl returned nonzero\n'
         fi
         return 0
     fi
@@ -371,9 +371,13 @@ check_disk()
                 next
             }
             if ($1 == "HEALTH_INCOMPLETE_FILESYSTEM_SCAN") {
-                if (!seen_failure[$2]++) {
+                query_failure=$2
+                for (field=3; field<=NF; field++) {
+                    query_failure=query_failure " " $field
+                }
+                if (!seen_failure[query_failure]++) {
                     if (query_failures != "") query_failures=query_failures ","
-                    query_failures=query_failures $2
+                    query_failures=query_failures query_failure
                 }
                 next
             }
@@ -427,7 +431,7 @@ check_disk()
     elif [ "$disk_valid" -eq 0 ]; then
         emit_result disk error 'filesystem output contained no usable capacity rows'
     elif [ "$disk_warning_count" -gt 0 ]; then
-        disk_detail="$disk_warning_count filesystem(s) at or above $DISK_WARNING%: $disk_items"
+        disk_detail="$disk_warning_count local filesystem path(s) at or above $DISK_WARNING%: $disk_items"
         if [ -n "$disk_incomplete" ]; then
             disk_detail="$disk_detail; scan incomplete: $disk_incomplete"
         fi
