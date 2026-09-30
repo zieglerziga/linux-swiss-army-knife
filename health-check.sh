@@ -273,10 +273,12 @@ filesystem_output()
 
     command -v df >/dev/null 2>&1 || return 1
     filesystem_data=$(LC_ALL=C df -Pkl 2>/dev/null)
+    filesystem_status=$?
     if [ -n "$filesystem_data" ]; then
-        # Some df implementations return non-zero when one pseudo-filesystem is
-        # unreadable even though they emitted usable rows for local disks.
         printf '%s\n' "$filesystem_data"
+        if [ "$filesystem_status" -ne 0 ]; then
+            printf 'HEALTH_INCOMPLETE_FILESYSTEM_SCAN\tdf-local-only\n'
+        fi
         return 0
     fi
 
@@ -319,9 +321,19 @@ filesystem_output()
         mount_path=$(printf '%s' "$escaped_mount" |
             sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
         mount_output=$(LC_ALL=C df -Pk "$mount_path" 2>/dev/null)
+        mount_status=$?
+        mount_row_found=$(printf '%s\n' "$mount_output" | awk '
+            {
+                capacity=$5
+                sub(/%$/, "", capacity)
+                if (capacity ~ /^[0-9]+$/) found=1
+            }
+            END { print found + 0 }
+        ')
         if [ -n "$mount_output" ]; then
             printf '%s\n' "$mount_output"
-        else
+        fi
+        if [ "$mount_status" -ne 0 ] || [ "$mount_row_found" -ne 1 ]; then
             printf 'HEALTH_UNREADABLE_FILESYSTEM\t%s\n' "$mount_path"
         fi
     done)
@@ -358,6 +370,13 @@ check_disk()
                 }
                 next
             }
+            if ($1 == "HEALTH_INCOMPLETE_FILESYSTEM_SCAN") {
+                if (!seen_failure[$2]++) {
+                    if (query_failures != "") query_failures=query_failures ","
+                    query_failures=query_failures $2
+                }
+                next
+            }
             capacity=$5
             sub(/%$/, "", capacity)
             if (capacity !~ /^[0-9]+$/) next
@@ -375,7 +394,7 @@ check_disk()
                 warning++
             }
         }
-        END { printf "%d|%d|%d|%s|%s|%s", valid, highest, warning, items, unknown_types, unreadable_mounts }
+        END { printf "%d|%d|%d|%s|%s|%s|%s", valid, highest, warning, items, unknown_types, unreadable_mounts, query_failures }
     ')
     disk_valid=${disk_summary%%|*}
     disk_remaining=${disk_summary#*|}
@@ -386,7 +405,9 @@ check_disk()
     disk_items=${disk_remaining%%|*}
     disk_remaining=${disk_remaining#*|}
     disk_unknown_types=${disk_remaining%%|*}
-    disk_unreadable_mounts=${disk_remaining#*|}
+    disk_remaining=${disk_remaining#*|}
+    disk_unreadable_mounts=${disk_remaining%%|*}
+    disk_query_failures=${disk_remaining#*|}
 
     disk_incomplete=
     if [ -n "$disk_unknown_types" ]; then
@@ -395,6 +416,10 @@ check_disk()
     if [ -n "$disk_unreadable_mounts" ]; then
         [ -z "$disk_incomplete" ] || disk_incomplete="$disk_incomplete; "
         disk_incomplete="${disk_incomplete}unreadable local path(s): $disk_unreadable_mounts"
+    fi
+    if [ -n "$disk_query_failures" ]; then
+        [ -z "$disk_incomplete" ] || disk_incomplete="$disk_incomplete; "
+        disk_incomplete="${disk_incomplete}query failure(s): $disk_query_failures"
     fi
 
     if [ "$disk_valid" -eq 0 ] && [ -n "$disk_incomplete" ]; then

@@ -96,7 +96,15 @@ cat >"$test_directory/df-bin/df" <<'MOCK_DF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$HEALTH_DF_CAPTURE"
 case " $* " in
-    *' -Pkl '*) exit 1 ;;
+    *' -Pkl '*)
+        if [ "${HEALTH_DF_GLOBAL_PARTIAL:-0}" -eq 1 ]; then
+            cat <<'DF_OUTPUT'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root 1000 900 100 90% /
+DF_OUTPUT
+        fi
+        exit 1
+        ;;
     *' / '*)
         cat <<'DF_OUTPUT'
 Filesystem 1024-blocks Used Available Capacity Mounted on
@@ -110,6 +118,13 @@ Filesystem 1024-blocks Used Available Capacity Mounted on
 DF_OUTPUT
         ;;
     *' /unreadable '*) exit 9 ;;
+    *' /partial '*)
+        cat <<'DF_OUTPUT'
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/partial 1000 100 900 10% /partial
+DF_OUTPUT
+        exit 9
+        ;;
     *)
         printf '%s\n' 'mock df received an unexpected mount' >&2
         exit 9
@@ -131,6 +146,21 @@ partial_df_output=$(PATH="$test_directory/df-bin:$PATH" \
 if grep -q '/remote' "$test_directory/df-arguments.txt"; then
     fail 'BusyBox df fallback queried a network mount'
 fi
+
+global_partial_output=
+if global_partial_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_DF_GLOBAL_PARTIAL=1 run_health_check \
+    --plain --disk --disk-warning 95); then
+    fail 'partial nonzero local-only df output unexpectedly passed'
+else
+    global_partial_status=$?
+fi
+[ "$global_partial_status" -eq 1 ] ||
+    fail 'partial local-only df output did not return unsupported status'
+expected_global_partial=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: query failure(s): df-local-only')
+[ "$global_partial_output" = "$expected_global_partial" ] ||
+    fail 'partial local-only df output was treated as complete'
 
 cat >"$test_directory/mounts" <<'MOUNTS'
 /dev/root / ext4 rw 0 0
@@ -209,6 +239,25 @@ fi
 expected_unreadable_disk=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: unreadable local path(s): /unreadable')
 [ "$unreadable_disk_output" = "$expected_unreadable_disk" ] ||
     fail 'failed local df query was silently omitted'
+
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/root / ext4 rw 0 0
+/dev/partial /partial xfs rw 0 0
+MOUNTS
+partial_mount_output=
+if partial_mount_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 95); then
+    fail 'partial nonzero per-mount df output unexpectedly passed'
+else
+    partial_mount_status=$?
+fi
+[ "$partial_mount_status" -eq 1 ] ||
+    fail 'partial per-mount df output did not return unsupported status'
+expected_partial_mount=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: unreadable local path(s): /partial')
+[ "$partial_mount_output" = "$expected_partial_mount" ] ||
+    fail 'partial per-mount df output was treated as complete'
 
 mkdir "$test_directory/package-bin"
 cat >"$test_directory/package-bin/package-mock" <<'PACKAGE_MOCK'
