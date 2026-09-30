@@ -68,6 +68,10 @@ jobs:
         shell: bash
         run: sh scripts/validate-posix.sh
 
+      - name: Test selectable health-check output
+        shell: bash
+        run: sh tests/test-health-posix.sh
+
       - name: Run shared fixture verification
         if: matrix.runner == 'ubuntu-24.04'
         shell: bash
@@ -78,6 +82,10 @@ jobs:
         env:
           SWISS_EXPECTED_PLATFORM: linux
         run: sh scripts/smoke-posix.sh
+
+      - name: Smoke-test native health-check output
+        shell: bash
+        run: sh scripts/smoke-health-posix.sh
 
   macos:
     name: macOS - ${{ matrix.runner }}
@@ -137,11 +145,19 @@ jobs:
         shell: bash
         run: sh tests/test-posix.sh
 
+      - name: Test selectable health-check output
+        shell: bash
+        run: sh tests/test-health-posix.sh
+
       - name: Smoke-test the macOS collector
         shell: bash
         env:
           SWISS_EXPECTED_PLATFORM: macos
         run: sh scripts/smoke-posix.sh
+
+      - name: Smoke-test native health-check output
+        shell: bash
+        run: sh scripts/smoke-health-posix.sh
 
   windows:
     name: Windows - ${{ matrix.runner }}
@@ -193,6 +209,14 @@ jobs:
         shell: powershell
         run: .\tests\test-windows.ps1
 
+      - name: Test health checks with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\test-health-windows.ps1
+
+      - name: Smoke-test native health checks with Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\smoke-health-windows.ps1
+
       - name: Validate with PowerShell 7
         shell: pwsh
         env:
@@ -208,3 +232,11 @@ jobs:
       - name: Test collector with PowerShell 7
         shell: pwsh
         run: .\tests\test-windows.ps1
+
+      - name: Test health checks with PowerShell 7
+        shell: pwsh
+        run: .\tests\test-health-windows.ps1
+
+      - name: Smoke-test native health checks with PowerShell 7
+        shell: pwsh
+        run: .\scripts\smoke-health-windows.ps1

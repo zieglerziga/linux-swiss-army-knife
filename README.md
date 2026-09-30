@@ -2,10 +2,11 @@
 
 [![Validate GitHub-hosted runners](https://github.com/zieglerziga/linux-swiss-army-knife/actions/workflows/validate-runners.yml/badge.svg)](https://github.com/zieglerziga/linux-swiss-army-knife/actions/workflows/validate-runners.yml)
 
-A dependency-free, read-only system inspector for Linux, minimal BusyBox
-systems, macOS, and Windows. It reports operating-system, hardware, filesystem,
-local-network, identity, and privilege facts without installing anything,
-requesting elevation, changing configuration, or contacting the internet.
+A dependency-free system inspector and opt-in health checker for Linux, minimal
+BusyBox systems, macOS, and Windows. The inventory command reports operating-
+system, hardware, filesystem, local-network, identity, and privilege facts
+without installing anything, requesting elevation, changing configuration, or
+contacting the internet.
 
 ## Run it
 
@@ -30,6 +31,44 @@ Windows uses Windows PowerShell 5.1 or modern PowerShell:
 No installation or administrator/root access is required. Copy the appropriate
 single script to the target computer and run it as the current user.
 
+## Selectable health checks
+
+Health checks are separate from the stable inventory report. Select one or more
+checks explicitly, or use `--all`:
+
+```sh
+sh health-check.sh --sudo --disk
+sh health-check.sh --processes --updates --plain
+sh health-check.sh --all --disk-warning 90
+```
+
+Windows exposes the same selection and output contract:
+
+```powershell
+.\health-check.ps1 --sudo --disk
+.\health-check.ps1 --processes --updates --plain
+.\health-check.ps1 --all --disk-warning 90
+```
+
+The checks report whether non-interactive elevation is available, flag local
+filesystems over the configured threshold, identify Linux `D`/`Z` process
+states or non-responsive Windows GUI processes, and query available updates.
+POSIX package managers use cached metadata without refreshing it. Windows uses
+the read-only Windows Update search API only when `--updates` is selected.
+
+Run the POSIX command on a Linux or BusyBox host without installing it:
+
+```sh
+sh health-check.sh --remote user@example.test --disk --processes
+sh health-check.sh --remote user@example.test --identity ~/.ssh/example --all
+```
+
+Remote mode streams the script over batch-mode SSH, preserves the local strict
+host-key policy, and never enables password login or disables host-key checks.
+Default output uses `[PASS]`, `[WARN]`, `[FAIL]`, or `[UNSUPPORTED]`. `--plain`
+emits stable `check<TAB>status<TAB>detail` rows. Exit status is `0` for all-pass,
+`1` for warnings or unsupported checks, and `2` for errors or invalid usage.
+
 ## Output
 
 The default output is a compact human report. `--plain` produces stable
@@ -43,11 +82,15 @@ Unavailable information is represented honestly as `unknown`, `unsupported`,
 
 ## Read-only and privacy contract
 
-The collectors do not invoke elevation tools, package managers, active network
-tests, Wi-Fi scans, mounts, service controls, or configuration commands. Local
-filesystem capacity collection excludes network filesystems. Potentially
-slower macOS firmware/storage and Windows physical-disk enumeration is
-available only with `--full`.
+The `swiss.sh` and `swiss.ps1` inventory collectors do not invoke elevation
+tools, package managers, active network tests, Wi-Fi scans, mounts, service
+controls, or configuration commands. Local filesystem capacity collection
+excludes network filesystems. Potentially slower macOS firmware/storage and
+Windows physical-disk enumeration is available only with `--full`.
+
+`health-check.*` has a narrower opt-in contract: `--sudo`, `--updates`, and
+`--remote` may create normal authentication, package-query, or SSH audit events,
+but do not install updates, elevate a command, or change remote configuration.
 
 Reports intentionally contain potentially identifying local information:
 hostname, username, hardware model, storage model, interface names, MAC
@@ -78,7 +121,8 @@ sh scripts/verify.sh
 ```
 
 The suite performs POSIX parsing, ShellCheck when available, source-policy
-checks, Dash/BusyBox/Bash behavior tests, JSON Schema validation, and PowerShell
-tests when `pwsh` is installed. CI adds narrow live smokes on every supported
-GitHub-hosted Linux, macOS, and Windows runner without executing the repository's
-older interactive `docker_manager.sh`.
+checks, Dash/BusyBox/Bash behavior tests, exact health-check output assertions,
+JSON Schema validation, and PowerShell tests when `pwsh` is installed. CI runs
+the health commands—not only linters—on the supported GitHub-hosted Linux,
+macOS, and Windows runners without executing the repository's older interactive
+`docker_manager.sh`.
