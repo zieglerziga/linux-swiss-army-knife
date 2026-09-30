@@ -462,7 +462,8 @@ check_disk()
         awk -v threshold="$DISK_WARNING" \
             '$1 >= threshold { count++ } END { print count + 0 }')
     disk_items=$(printf '%s\n' "$capacity_rows" |
-        awk -F "$(printf '\t')" -v threshold="$DISK_WARNING" '
+        awk -v threshold="$DISK_WARNING" '
+            BEGIN { FS="\t" }
             $1 >= threshold {
                 if (items != "") items=items ", "
                 items=items $2 "=" $1 "%"
@@ -545,7 +546,9 @@ read_procfs_processes()
         [ -d "$process_directory" ] || continue
         process_stat=$process_directory/stat
         if [ ! -r "$process_stat" ]; then
-            process_unreadable=$((process_unreadable + 1))
+            if [ -d "$process_directory" ]; then
+                process_unreadable=$((process_unreadable + 1))
+            fi
             continue
         fi
 
@@ -664,7 +667,8 @@ check_processes()
     stuck_rows=$(printf '%s\n' "$processes_output" | stuck_process_rows)
     process_count=$(printf '%s\n' "$stuck_rows" | count_nonempty_lines)
     process_items=$(printf '%s\n' "$stuck_rows" |
-        awk -F "$(printf '\t')" '
+        awk '
+            BEGIN { FS="\t" }
             NR <= 10 {
                 if (items != "") items=items ", "
                 items=items $1 ":" $2 ":" $3
