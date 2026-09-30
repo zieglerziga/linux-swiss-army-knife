@@ -50,11 +50,13 @@ Windows exposes the same selection and output contract:
 .\health-check.ps1 --all --disk-warning 90
 ```
 
-The checks report whether non-interactive elevation is available, flag local
-filesystems over the configured threshold, identify Linux `D`/`Z` process
-states or non-responsive Windows GUI processes, and query available updates.
-POSIX package managers use cached metadata without refreshing it. Windows uses
-the read-only Windows Update search API only when `--updates` is selected.
+The checks report elevation state, flag local filesystems over the configured
+used-space threshold, identify Linux `D`/`Z` process states or non-responsive
+Windows GUI processes, and query available updates. On POSIX systems the sudo
+check validates `sudo -n`; on Windows it reports whether the process is already
+elevated and detects `sudo` without invoking an elevation prompt. POSIX package
+managers use cached metadata without refreshing it. Windows uses the read-only
+Windows Update search API only when `--updates` is selected.
 
 Run the POSIX command on a Linux or BusyBox host without installing it:
 
@@ -63,11 +65,19 @@ sh health-check.sh --remote user@example.test --disk --processes
 sh health-check.sh --remote user@example.test --identity ~/.ssh/example --all
 ```
 
+PowerShell can drive the same POSIX remote mode by streaming the sibling shell
+script to a Linux, macOS, or BusyBox target:
+
+```powershell
+.\health-check.ps1 --remote user@example.test --identity $HOME\.ssh\example --disk
+```
+
 Remote mode streams the script over batch-mode SSH, preserves the local strict
 host-key policy, and never enables password login or disables host-key checks.
-Default output uses `[PASS]`, `[WARN]`, `[FAIL]`, or `[UNSUPPORTED]`. `--plain`
-emits stable `check<TAB>status<TAB>detail` rows. Exit status is `0` for all-pass,
-`1` for warnings or unsupported checks, and `2` for errors or invalid usage.
+Default output uses `[PASS]`, `[WARN]`, `[FAIL]`, `[UNSUPPORTED]`, or `[ERROR]`.
+`--plain` emits stable `check<TAB>status<TAB>detail` rows. Exit status is `0` for
+all-pass, `1` for warnings or unsupported checks, and `2` for errors or invalid
+usage.
 
 ## Output
 

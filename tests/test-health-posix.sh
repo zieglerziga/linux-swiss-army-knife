@@ -94,18 +94,99 @@ fi
 mkdir "$test_directory/df-bin"
 cat >"$test_directory/df-bin/df" <<'MOCK_DF'
 #!/bin/sh
-cat <<'DF_OUTPUT'
+printf '%s\n' "$*" >>"$HEALTH_DF_CAPTURE"
+case " $* " in
+    *' -Pkl '*) exit 1 ;;
+    *' / '*)
+        cat <<'DF_OUTPUT'
 Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/root 1000 900 100 90% /
 DF_OUTPUT
-exit 1
+        ;;
+    *)
+        printf '%s\n' 'mock df received an unexpected mount' >&2
+        exit 9
+        ;;
+esac
 MOCK_DF
 chmod +x "$test_directory/df-bin/df"
-partial_df_output=$(PATH="$test_directory/df-bin:$PATH" run_health_check \
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/root / ext4 rw 0 0
+server:/share /remote nfs rw 0 0
+MOUNTS
+partial_df_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
     --plain --disk --disk-warning 95) ||
     fail 'usable df output was discarded because df returned non-zero'
 [ "$partial_df_output" = "$expected_disk_pass" ] ||
     fail 'partial-success df output was parsed incorrectly'
+if grep -q '/remote' "$test_directory/df-arguments.txt"; then
+    fail 'BusyBox df fallback queried a network mount'
+fi
+
+mkdir "$test_directory/package-bin"
+cat >"$test_directory/package-bin/package-mock" <<'PACKAGE_MOCK'
+#!/bin/sh
+manager=${0##*/}
+printf '%s\t%s\t%s\n' "$manager" "${HOMEBREW_NO_AUTO_UPDATE:-}" "$*" \
+    >>"$HEALTH_PACKAGE_CAPTURE"
+if [ "${HEALTH_PACKAGE_FAILURE:-0}" -eq 1 ]; then
+    exit 7
+fi
+case "$manager" in
+    apt-get) printf '%s\n' 'Inst sample [1] (2 repository)' ;;
+    dnf|yum) printf '%s\n' 'sample.x86_64 2 repository'; exit 100 ;;
+    zypper) printf '%s\n' 'v | repository | sample | 1 | 2 | x86_64' ;;
+    apk) printf '%s\n' 'sample-1 < 2' ;;
+    pacman) printf '%s\n' 'sample 1 -> 2' ;;
+    brew) printf '%s\n' 'sample' ;;
+esac
+PACKAGE_MOCK
+chmod +x "$test_directory/package-bin/package-mock"
+for package_manager in apt-get dnf yum zypper apk pacman brew; do
+    ln -s package-mock "$test_directory/package-bin/$package_manager"
+    package_output=
+    if package_output=$(PATH="$test_directory/package-bin:$PATH" \
+        HEALTH_TEST_PACKAGE_MANAGER="$package_manager" \
+        HEALTH_PACKAGE_CAPTURE="$test_directory/package-arguments.txt" \
+        run_health_check --plain --updates); then
+        fail "$package_manager update fixture unexpectedly returned success"
+    else
+        package_status=$?
+    fi
+    [ "$package_status" -eq 1 ] ||
+        fail "$package_manager update fixture did not return warning status"
+    expected_package=$(printf 'updates\twarn\t1 cached package update(s) are available via %s' \
+        "$package_manager")
+    [ "$package_output" = "$expected_package" ] ||
+        fail "$package_manager update output is not exact"
+done
+grep -q '^apt-get.*-s.*Debug::NoLocking=1.*upgrade' \
+    "$test_directory/package-arguments.txt" || fail 'apt-get was not simulation-only'
+grep -q '^dnf.*--cacheonly' "$test_directory/package-arguments.txt" ||
+    fail 'dnf was not cache-only'
+grep -q '^yum.*-C' "$test_directory/package-arguments.txt" ||
+    fail 'yum was not cache-only'
+grep -q '^zypper.*--no-refresh' "$test_directory/package-arguments.txt" ||
+    fail 'zypper was allowed to refresh metadata'
+grep -q '^brew[[:space:]]*1[[:space:]]' "$test_directory/package-arguments.txt" ||
+    fail 'Homebrew auto-update was not disabled'
+
+package_failure_output=
+if package_failure_output=$(PATH="$test_directory/package-bin:$PATH" \
+    HEALTH_TEST_PACKAGE_MANAGER=pacman HEALTH_PACKAGE_FAILURE=1 \
+    HEALTH_PACKAGE_CAPTURE="$test_directory/package-arguments.txt" \
+    run_health_check --plain --updates); then
+    fail 'failed pacman query unexpectedly succeeded'
+else
+    package_failure_status=$?
+fi
+[ "$package_failure_status" -eq 2 ] ||
+    fail 'failed pacman query did not return error status'
+expected_package_failure=$(printf 'updates\terror\tpacman could not query cached update metadata')
+[ "$package_failure_output" = "$expected_package_failure" ] ||
+    fail 'failed pacman query was not reported as an error'
 
 mkdir "$test_directory/bin"
 cat >"$test_directory/bin/ssh" <<'MOCK_SSH'

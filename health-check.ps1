@@ -144,7 +144,7 @@ for ($index = 0; $index -lt $Arguments.Count; $index++) {
                 break
             }
             $remote = $Arguments[$index]
-            if ($remote -notmatch '^[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*$') {
+            if ($remote -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$') {
                 $parseError = '--remote must be a valid USER@HOST value'
             }
             continue
@@ -275,7 +275,8 @@ foreach ($check in $selected) {
                     Add-Result $results 'sudo' 'pass' 'PowerShell is running elevated'
                 }
                 elseif (Get-Command -Name sudo -ErrorAction SilentlyContinue) {
-                    Add-Result $results 'sudo' 'pass' 'sudo command is available; current session is not elevated'
+                    Add-Result $results 'sudo' 'warn' `
+                        'sudo is available, but non-interactive elevation was not attempted'
                 }
                 else {
                     Add-Result $results 'sudo' 'warn' 'session is not elevated and sudo is unavailable'

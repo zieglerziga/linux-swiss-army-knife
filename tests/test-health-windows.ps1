@@ -44,6 +44,16 @@ try {
     Assert-True ($sudoResult.ExitCode -eq 0) '--sudo should pass'
     Assert-Lines @("sudo`tpass`tPowerShell is running elevated") $sudoResult.Output '--sudo selection or plain output differs'
 
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'sudo-result.tsv') `
+        -Value "warn`tsudo is available, but non-interactive elevation was not attempted" `
+        -NoNewline
+    $sudoWarning = Invoke-HealthCheck @('--sudo', '--plain')
+    Assert-True ($sudoWarning.ExitCode -eq 1) 'unverified sudo availability should warn'
+    Assert-Lines @("sudo`twarn`tsudo is available, but non-interactive elevation was not attempted") `
+        $sudoWarning.Output 'unverified sudo output differs'
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'sudo-result.tsv') `
+        -Value "pass`tPowerShell is running elevated" -NoNewline
+
     $humanResult = Invoke-HealthCheck @('--sudo')
     Assert-True ($humanResult.ExitCode -eq 0) 'human-format sudo check should pass'
     Assert-Lines @('[PASS] sudo PowerShell is running elevated') $humanResult.Output 'human output differs'
@@ -81,6 +91,10 @@ try {
 
     $invalidRemoteResult = Invoke-HealthCheck @('--sudo', '--remote', 'user@bad host')
     Assert-True ($invalidRemoteResult.ExitCode -eq 2) 'invalid remote hosts should be usage errors'
+
+    $optionRemoteResult = Invoke-HealthCheck @('--sudo', '--remote', '-x@host.test')
+    Assert-True ($optionRemoteResult.ExitCode -eq 2) `
+        'remote usernames that resemble SSH options should be rejected'
 
     $invalidTimeoutResult = Invoke-HealthCheck @('--sudo', '--connect-timeout', '0')
     Assert-True ($invalidTimeoutResult.ExitCode -eq 2) 'invalid connection timeouts should be usage errors'

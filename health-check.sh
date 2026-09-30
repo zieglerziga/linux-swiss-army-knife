@@ -20,6 +20,8 @@ SSH_TIMEOUT=10
 OVERALL_STATUS=0
 SELECTED_CHECKS=0
 HEALTH_FIXTURE_ROOT=${HEALTH_FIXTURE_ROOT:-}
+HEALTH_TEST_MOUNTS_PATH=${HEALTH_TEST_MOUNTS_PATH:-}
+HEALTH_TEST_PACKAGE_MANAGER=${HEALTH_TEST_PACKAGE_MANAGER:-}
 
 usage()
 {
@@ -278,7 +280,27 @@ filesystem_output()
         return 0
     fi
 
-    filesystem_data=$(LC_ALL=C df -Pk 2>/dev/null)
+    mounts_path=$HEALTH_TEST_MOUNTS_PATH
+    if [ -z "$mounts_path" ]; then
+        if [ -r /proc/self/mounts ]; then
+            mounts_path=/proc/self/mounts
+        elif [ -r /proc/mounts ]; then
+            mounts_path=/proc/mounts
+        fi
+    fi
+    [ -n "$mounts_path" ] && [ -r "$mounts_path" ] || return 1
+
+    # BusyBox df has no local-only flag. Resolve an allowlisted set of local
+    # mount types from procfs and query only those mount points.
+    filesystem_data=$(awk '
+        $3 ~ /^(rootfs|ext2|ext3|ext4|xfs|btrfs|f2fs|vfat|exfat|ntfs|ntfs3|zfs|tmpfs|devtmpfs|overlay|squashfs|erofs|ramfs|ubifs|jffs2)$/ {
+            print $2
+        }
+    ' "$mounts_path" | while IFS= read -r escaped_mount; do
+        mount_path=$(printf '%s' "$escaped_mount" |
+            sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
+        LC_ALL=C df -Pk "$mount_path" 2>/dev/null || true
+    done)
     [ -n "$filesystem_data" ] || return 1
     printf '%s\n' "$filesystem_data"
 }
@@ -433,7 +455,27 @@ check_updates()
         return
     fi
 
-    if command -v apt-get >/dev/null 2>&1; then
+    update_manager=$HEALTH_TEST_PACKAGE_MANAGER
+    if [ -z "$update_manager" ]; then
+        for manager_candidate in apt-get dnf yum zypper apk pacman brew; do
+            if command -v "$manager_candidate" >/dev/null 2>&1; then
+                update_manager=$manager_candidate
+                break
+            fi
+        done
+    fi
+
+    if [ -z "$update_manager" ]; then
+        emit_result updates unsupported 'no supported package manager was found'
+        return
+    fi
+    command -v "$update_manager" >/dev/null 2>&1 || {
+        emit_result updates error "$update_manager is unavailable"
+        return
+    }
+
+    case "$update_manager" in
+    apt-get)
         update_output=$(LC_ALL=C apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null)
         update_status=$?
         if [ "$update_status" -ne 0 ]; then
@@ -442,10 +484,9 @@ check_updates()
         fi
         update_count=$(printf '%s\n' "$update_output" | awk '/^Inst / { count++ } END { print count + 0 }')
         emit_update_count apt-get "$update_count"
-        return
-    fi
+        ;;
 
-    if command -v dnf >/dev/null 2>&1; then
+    dnf)
         update_output=$(LC_ALL=C dnf -q --cacheonly check-update 2>/dev/null)
         update_status=$?
         if [ "$update_status" -ne 0 ] && [ "$update_status" -ne 100 ]; then
@@ -454,10 +495,9 @@ check_updates()
         fi
         update_count=$(printf '%s\n' "$update_output" | awk '$1 ~ /^[[:alnum:]_.+-]+\.[[:alnum:]_]+$/ { count++ } END { print count + 0 }')
         emit_update_count dnf "$update_count"
-        return
-    fi
+        ;;
 
-    if command -v yum >/dev/null 2>&1; then
+    yum)
         update_output=$(LC_ALL=C yum -q -C check-update 2>/dev/null)
         update_status=$?
         if [ "$update_status" -ne 0 ] && [ "$update_status" -ne 100 ]; then
@@ -466,52 +506,49 @@ check_updates()
         fi
         update_count=$(printf '%s\n' "$update_output" | awk '$1 ~ /^[[:alnum:]_.+-]+\.[[:alnum:]_]+$/ { count++ } END { print count + 0 }')
         emit_update_count yum "$update_count"
-        return
-    fi
+        ;;
 
-    if command -v zypper >/dev/null 2>&1; then
+    zypper)
         update_output=$(LC_ALL=C zypper --non-interactive --no-refresh list-updates 2>/dev/null) || {
             emit_result updates error 'zypper could not query cached update metadata'
             return
         }
         update_count=$(printf '%s\n' "$update_output" | awk -F '|' '$1 ~ /^[[:space:]]*v[[:space:]]*$/ { count++ } END { print count + 0 }')
         emit_update_count zypper "$update_count"
-        return
-    fi
+        ;;
 
-    if command -v apk >/dev/null 2>&1; then
+    apk)
         update_output=$(LC_ALL=C apk version -l '<' 2>/dev/null) || {
             emit_result updates error 'apk could not query cached update metadata'
             return
         }
         update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
         emit_update_count apk "$update_count"
-        return
-    fi
+        ;;
 
-    if command -v pacman >/dev/null 2>&1; then
+    pacman)
         update_output=$(LC_ALL=C pacman -Qu 2>/dev/null)
         update_status=$?
-        if [ "$update_status" -ne 0 ] && [ -n "$update_output" ]; then
+        if [ "$update_status" -ne 0 ]; then
             emit_result updates error 'pacman could not query cached update metadata'
             return
         fi
         update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
         emit_update_count pacman "$update_count"
-        return
-    fi
+        ;;
 
-    if command -v brew >/dev/null 2>&1; then
+    brew)
         update_output=$(HOMEBREW_NO_AUTO_UPDATE=1 LC_ALL=C brew outdated 2>/dev/null) || {
             emit_result updates error 'Homebrew could not query installed formula metadata'
             return
         }
         update_count=$(printf '%s\n' "$update_output" | count_nonempty_lines)
         emit_update_count brew "$update_count"
-        return
-    fi
-
-    emit_result updates unsupported 'no supported package manager was found'
+        ;;
+    *)
+        emit_result updates error "unsupported package-manager override: $update_manager"
+        ;;
+    esac
 }
 
 main()
