@@ -70,6 +70,17 @@ try {
     Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') `
         -Value "C:`t100`t5" -NoNewline
 
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') -Value @(
+        "C:`t100`t50",
+        "D:`tmissing`tmissing"
+    )
+    $incompleteDiskResult = Invoke-HealthCheck @('--disk', '--plain')
+    Assert-True ($incompleteDiskResult.ExitCode -eq 1) 'incomplete disk check should exit 1'
+    Assert-Lines @("disk`tunsupported`tdisk scan incomplete: unreadable capacity data for D:") `
+        $incompleteDiskResult.Output 'incomplete disk output differs'
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') `
+        -Value "C:`t100`t5" -NoNewline
+
     $processResult = Invoke-HealthCheck @('--processes', '--plain')
     Assert-True ($processResult.ExitCode -eq 1) 'unresponsive GUI process should warn'
     Assert-Lines @("processes`twarn`tunresponsive GUI processes: Editor (PID 42)") `

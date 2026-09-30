@@ -62,6 +62,37 @@ function Add-Result {
     $Results.Add([pscustomobject] @{ Name = $Name; Status = $Status; Detail = $Detail })
 }
 
+function Add-DiskResult {
+    param(
+        [System.Collections.Generic.List[object]] $Results,
+        [System.Collections.Generic.List[string]] $LowDisks,
+        [System.Collections.Generic.List[string]] $UnreadableDisks,
+        [int] $FixedDiskCount,
+        [int] $DiskWarning
+    )
+
+    if ($FixedDiskCount -eq 0) {
+        Add-Result $Results 'disk' 'unsupported' 'no fixed disks were found'
+    }
+    elseif ($LowDisks.Count -gt 0) {
+        $detail = $LowDisks -join '; '
+        if ($UnreadableDisks.Count -gt 0) {
+            $detail += '; scan incomplete: unreadable capacity data for ' +
+                ($UnreadableDisks -join ', ')
+        }
+        Add-Result $Results 'disk' 'warn' $detail
+    }
+    elseif ($UnreadableDisks.Count -gt 0) {
+        Add-Result $Results 'disk' 'unsupported' `
+            ('disk scan incomplete: unreadable capacity data for ' +
+                ($UnreadableDisks -join ', '))
+    }
+    else {
+        Add-Result $Results 'disk' 'pass' `
+            ('all fixed disks are below {0}% used' -f $DiskWarning)
+    }
+}
+
 function Invoke-Remote {
     param(
         [string] $Remote,
@@ -230,24 +261,32 @@ foreach ($check in $selected) {
                     $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-disks.tsv'
                     if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) { throw 'fixture is missing: windows-disks.tsv' }
                     $lowDisks = New-Object 'System.Collections.Generic.List[string]'
-                    $validDiskCount = 0
+                    $unreadableDisks = New-Object 'System.Collections.Generic.List[string]'
+                    $fixedDiskCount = 0
                     foreach ($line in Get-Content -LiteralPath $fixturePath) {
                         if ([string]::IsNullOrWhiteSpace($line)) { continue }
                         $columns = $line -split "`t", 3
-                        if ($columns.Count -ne 3 -or $columns[1] -notmatch '^\d+(?:\.\d+)?$' -or $columns[2] -notmatch '^\d+(?:\.\d+)?$') { throw 'invalid windows-disks.tsv row' }
+                        if ($columns.Count -ne 3) { throw 'invalid windows-disks.tsv row' }
+                        $fixedDiskCount++
+                        if ($columns[1] -eq 'missing' -or $columns[2] -eq 'missing') {
+                            $unreadableDisks.Add($columns[0])
+                            continue
+                        }
+                        if ($columns[1] -notmatch '^\d+(?:\.\d+)?$' -or
+                            $columns[2] -notmatch '^\d+(?:\.\d+)?$') {
+                            throw 'invalid windows-disks.tsv row'
+                        }
                         $size = [double]::Parse($columns[1], [Globalization.CultureInfo]::InvariantCulture)
                         $free = [double]::Parse($columns[2], [Globalization.CultureInfo]::InvariantCulture)
                         if ($size -le 0 -or $free -lt 0 -or $free -gt $size) { throw 'invalid disk size or free space in fixture' }
-                        $validDiskCount++
                         $usedPercent = 100.0 * ($size - $free) / $size
                         if ($usedPercent -ge $diskWarning) {
                             $lowDisks.Add(('{0} {1}% used' -f $columns[0],
                                 $usedPercent.ToString('N1', [Globalization.CultureInfo]::InvariantCulture)))
                         }
                     }
-                    if ($validDiskCount -eq 0) { Add-Result $results 'disk' 'unsupported' 'no fixed disks were found' }
-                    elseif ($lowDisks.Count -eq 0) { Add-Result $results 'disk' 'pass' ('all fixed disks are below {0}% used' -f $diskWarning) }
-                    else { Add-Result $results 'disk' 'warn' ($lowDisks -join '; ') }
+                    Add-DiskResult $results $lowDisks $unreadableDisks `
+                        $fixedDiskCount $diskWarning
                 }
                 'processes' {
                     $fixturePath = Join-Path $env:HEALTH_FIXTURE_ROOT 'windows-processes.tsv'
@@ -287,21 +326,26 @@ foreach ($check in $selected) {
             }
             'disk' {
                 $lowDisks = New-Object 'System.Collections.Generic.List[string]'
+                $unreadableDisks = New-Object 'System.Collections.Generic.List[string]'
                 $fixedDisks = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType = 3')
-                $validDiskCount = 0
                 foreach ($disk in $fixedDisks) {
+                    $diskName = [string] $disk.DeviceID
+                    if ([string]::IsNullOrWhiteSpace($diskName)) { $diskName = '<unknown>' }
+                    $diskSize = [double] $disk.Size
+                    $diskFree = [double] $disk.FreeSpace
                     if ($null -eq $disk.Size -or $null -eq $disk.FreeSpace -or
-                        [double] $disk.Size -le 0) { continue }
-                    $validDiskCount++
-                    $usedPercent = 100.0 * ([double] $disk.Size - [double] $disk.FreeSpace) / [double] $disk.Size
+                        $diskSize -le 0 -or $diskFree -lt 0 -or $diskFree -gt $diskSize) {
+                        $unreadableDisks.Add($diskName)
+                        continue
+                    }
+                    $usedPercent = 100.0 * ($diskSize - $diskFree) / $diskSize
                     if ($usedPercent -ge $diskWarning) {
-                        $lowDisks.Add(('{0} {1}% used' -f $disk.DeviceID,
+                        $lowDisks.Add(('{0} {1}% used' -f $diskName,
                             $usedPercent.ToString('N1', [Globalization.CultureInfo]::InvariantCulture)))
                     }
                 }
-                if ($validDiskCount -eq 0) { Add-Result $results 'disk' 'unsupported' 'no fixed disks were found' }
-                elseif ($lowDisks.Count -eq 0) { Add-Result $results 'disk' 'pass' ('all fixed disks are below {0}% used' -f $diskWarning) }
-                else { Add-Result $results 'disk' 'warn' ($lowDisks -join '; ') }
+                Add-DiskResult $results $lowDisks $unreadableDisks `
+                    $fixedDisks.Count $diskWarning
             }
             'processes' {
                 $hung = New-Object 'System.Collections.Generic.List[string]'

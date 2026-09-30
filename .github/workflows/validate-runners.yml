@@ -215,7 +215,13 @@ jobs:
 
       - name: Smoke-test native health checks with Windows PowerShell 5.1
         shell: powershell
-        run: .\scripts\smoke-health-windows.ps1
+        run: .\scripts\smoke-health-windows.ps1 -SkipUpdates
+
+      - name: Smoke-test native Windows Update integration
+        if: matrix.runner == 'windows-2025'
+        shell: powershell
+        timeout-minutes: 5
+        run: .\scripts\smoke-health-windows.ps1 -UpdatesOnly
 
       - name: Validate with PowerShell 7
         shell: pwsh
@@ -237,6 +243,6 @@ jobs:
         shell: pwsh
         run: .\tests\test-health-windows.ps1
 
-      - name: Smoke-test native health checks with PowerShell 7
+      - name: Smoke-test native health checks with PowerShell 7 (skip duplicate update scan)
         shell: pwsh
-        run: .\scripts\smoke-health-windows.ps1
+        run: .\scripts\smoke-health-windows.ps1 -SkipUpdates
