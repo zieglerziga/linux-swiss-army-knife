@@ -1,0 +1,4 @@
+NAME="Fixture Linux"
+PRETTY_NAME="Fixture Linux \"quoted\" \\ path snowman-☃"
+VERSION_ID="42.1"
+BUILD_ID=fixture-build

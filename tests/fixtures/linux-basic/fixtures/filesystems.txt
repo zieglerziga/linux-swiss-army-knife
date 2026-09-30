@@ -1,0 +1,1 @@
+/|total=1073741824|used=536870912|available=536870912|capacity=50%
