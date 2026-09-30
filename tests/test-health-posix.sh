@@ -109,6 +109,7 @@ Filesystem 1024-blocks Used Available Capacity Mounted on
 /dev/ntfs 1000 960 40 96% /media/ntfs
 DF_OUTPUT
         ;;
+    *' /unreadable '*) exit 9 ;;
     *)
         printf '%s\n' 'mock df received an unexpected mount' >&2
         exit 9
@@ -168,9 +169,46 @@ else
 fi
 [ "$unknown_disk_status" -eq 1 ] ||
     fail 'unclassified filesystem did not return unsupported status'
-expected_unknown_disk=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but mounted type(s) could not be classified: mysteryfs')
+expected_unknown_disk=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: unclassified type(s): mysteryfs')
 [ "$unknown_disk_output" = "$expected_unknown_disk" ] ||
     fail 'unclassified filesystem was silently omitted'
+
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/mystery /mystery mysteryfs rw 0 0
+MOUNTS
+all_unknown_output=
+if all_unknown_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 95); then
+    fail 'all-unknown filesystem fixture unexpectedly passed'
+else
+    all_unknown_status=$?
+fi
+[ "$all_unknown_status" -eq 1 ] ||
+    fail 'all-unknown filesystem fixture did not return unsupported status'
+expected_all_unknown=$(printf 'disk\tunsupported\tfilesystem scan incomplete: unclassified type(s): mysteryfs')
+[ "$all_unknown_output" = "$expected_all_unknown" ] ||
+    fail 'all-unknown filesystem result is not exact'
+
+cat >"$test_directory/mounts" <<'MOUNTS'
+/dev/root / ext4 rw 0 0
+/dev/data /unreadable xfs rw 0 0
+MOUNTS
+unreadable_disk_output=
+if unreadable_disk_output=$(PATH="$test_directory/df-bin:$PATH" \
+    HEALTH_DF_CAPTURE="$test_directory/df-arguments.txt" \
+    HEALTH_TEST_MOUNTS_PATH="$test_directory/mounts" run_health_check \
+    --plain --disk --disk-warning 95); then
+    fail 'partially unreadable local filesystem fixture unexpectedly passed'
+else
+    unreadable_disk_status=$?
+fi
+[ "$unreadable_disk_status" -eq 1 ] ||
+    fail 'unreadable local filesystem did not return unsupported status'
+expected_unreadable_disk=$(printf 'disk\tunsupported\tknown local filesystems are below 95%%, but scan is incomplete: unreadable local path(s): /unreadable')
+[ "$unreadable_disk_output" = "$expected_unreadable_disk" ] ||
+    fail 'failed local df query was silently omitted'
 
 mkdir "$test_directory/package-bin"
 cat >"$test_directory/package-bin/package-mock" <<'PACKAGE_MOCK'

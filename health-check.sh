@@ -318,7 +318,12 @@ filesystem_output()
         escaped_mount=$mount_value
         mount_path=$(printf '%s' "$escaped_mount" |
             sed 's/\\040/ /g; s/\\011/\	/g; s/\\134/\\/g')
-        LC_ALL=C df -Pk "$mount_path" 2>/dev/null || true
+        mount_output=$(LC_ALL=C df -Pk "$mount_path" 2>/dev/null)
+        if [ -n "$mount_output" ]; then
+            printf '%s\n' "$mount_output"
+        else
+            printf 'HEALTH_UNREADABLE_FILESYSTEM\t%s\n' "$mount_path"
+        fi
     done)
     [ -n "$filesystem_data" ] || return 1
     printf '%s\n' "$filesystem_data"
@@ -342,6 +347,17 @@ check_disk()
                 unknown_types=unknown_types $2
                 next
             }
+            if ($1 == "HEALTH_UNREADABLE_FILESYSTEM") {
+                unreadable_mount=$2
+                for (field=3; field<=NF; field++) {
+                    unreadable_mount=unreadable_mount " " $field
+                }
+                if (!seen_unreadable[unreadable_mount]++) {
+                    if (unreadable_mounts != "") unreadable_mounts=unreadable_mounts ","
+                    unreadable_mounts=unreadable_mounts unreadable_mount
+                }
+                next
+            }
             capacity=$5
             sub(/%$/, "", capacity)
             if (capacity !~ /^[0-9]+$/) next
@@ -359,7 +375,7 @@ check_disk()
                 warning++
             }
         }
-        END { printf "%d|%d|%d|%s|%s", valid, highest, warning, items, unknown_types }
+        END { printf "%d|%d|%d|%s|%s|%s", valid, highest, warning, items, unknown_types, unreadable_mounts }
     ')
     disk_valid=${disk_summary%%|*}
     disk_remaining=${disk_summary#*|}
@@ -368,22 +384,32 @@ check_disk()
     disk_warning_count=${disk_remaining%%|*}
     disk_remaining=${disk_remaining#*|}
     disk_items=${disk_remaining%%|*}
-    disk_unknown_types=${disk_remaining#*|}
+    disk_remaining=${disk_remaining#*|}
+    disk_unknown_types=${disk_remaining%%|*}
+    disk_unreadable_mounts=${disk_remaining#*|}
 
-    if [ "$disk_valid" -eq 0 ] && [ -n "$disk_unknown_types" ]; then
-        emit_result disk unsupported \
-            "mounted filesystem type(s) could not be classified: $disk_unknown_types"
+    disk_incomplete=
+    if [ -n "$disk_unknown_types" ]; then
+        disk_incomplete="unclassified type(s): $disk_unknown_types"
+    fi
+    if [ -n "$disk_unreadable_mounts" ]; then
+        [ -z "$disk_incomplete" ] || disk_incomplete="$disk_incomplete; "
+        disk_incomplete="${disk_incomplete}unreadable local path(s): $disk_unreadable_mounts"
+    fi
+
+    if [ "$disk_valid" -eq 0 ] && [ -n "$disk_incomplete" ]; then
+        emit_result disk unsupported "filesystem scan incomplete: $disk_incomplete"
     elif [ "$disk_valid" -eq 0 ]; then
         emit_result disk error 'filesystem output contained no usable capacity rows'
     elif [ "$disk_warning_count" -gt 0 ]; then
         disk_detail="$disk_warning_count filesystem(s) at or above $DISK_WARNING%: $disk_items"
-        if [ -n "$disk_unknown_types" ]; then
-            disk_detail="$disk_detail; unclassified type(s): $disk_unknown_types"
+        if [ -n "$disk_incomplete" ]; then
+            disk_detail="$disk_detail; scan incomplete: $disk_incomplete"
         fi
         emit_result disk warn "$disk_detail"
-    elif [ -n "$disk_unknown_types" ]; then
+    elif [ -n "$disk_incomplete" ]; then
         emit_result disk unsupported \
-            "known local filesystems are below $DISK_WARNING%, but mounted type(s) could not be classified: $disk_unknown_types"
+            "known local filesystems are below $DISK_WARNING%, but scan is incomplete: $disk_incomplete"
     else
         emit_result disk pass \
             "highest local filesystem use is $disk_highest%; warning threshold is $DISK_WARNING%"
