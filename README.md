@@ -58,7 +58,8 @@ whether the process is already elevated and detects `sudo` without invoking an
 elevation prompt. POSIX package managers use cached metadata without refreshing
 it. Windows uses the read-only Windows Update search API only when `--updates`
 is selected. The Linux disk scan ignores read-only mounts such as package
-images, where a reported 100% capacity is expected.
+images, where a reported 100% capacity is expected. The portable `df` fallback
+also excludes known pseudo-filesystem sources such as macOS `devfs`.
 
 Run the POSIX command on a Linux or BusyBox host without installing it:
 

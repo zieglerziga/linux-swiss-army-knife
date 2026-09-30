@@ -78,6 +78,17 @@ try {
     Assert-True ($incompleteDiskResult.ExitCode -eq 1) 'incomplete disk check should exit 1'
     Assert-Lines @("disk`tunsupported`tdisk scan incomplete: unreadable capacity data for D:") `
         $incompleteDiskResult.Output 'incomplete disk output differs'
+
+    Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') -Value @(
+        "C:`t100`t5",
+        "D:`tmissing`tmissing"
+    )
+    $warningIncompleteDiskResult = Invoke-HealthCheck @('--disk', '--plain')
+    Assert-True ($warningIncompleteDiskResult.ExitCode -eq 1) `
+        'warning plus incomplete disk check should exit 1'
+    Assert-Lines @("disk`twarn`tC: 95.0% used; scan incomplete: unreadable capacity data for D:") `
+        $warningIncompleteDiskResult.Output 'warning plus incomplete disk output differs'
+
     Set-Content -LiteralPath (Join-Path $fixtureRoot 'windows-disks.tsv') `
         -Value "C:`t100`t5" -NoNewline
 

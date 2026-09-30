@@ -367,6 +367,9 @@ check_disk()
             gsub(/[\t\r\n]/, " ", value)
             return value
         }
+        function is_pseudo_source(source) {
+            return source ~ /^(devfs|procfs|linprocfs|linsysfs|fdesc|fdescfs|map|-hosts)$/
+        }
         {
             if ($1 == "HEALTH_UNKNOWN_FILESYSTEM") {
                 if (unknown_types != "") unknown_types=unknown_types ","
@@ -395,6 +398,7 @@ check_disk()
                 }
                 next
             }
+            if (is_pseudo_source($1)) next
             capacity=$5
             sub(/%$/, "", capacity)
             if (capacity !~ /^[0-9]+$/) next
