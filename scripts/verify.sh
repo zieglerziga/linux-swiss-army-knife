@@ -14,9 +14,14 @@ cd "$repository_root" || fail 'cannot enter repository root'
 
 printf '%s\n' '== Parse checks =='
 sh -n swiss.sh || fail 'sh rejected swiss.sh'
+sh -n health-check.sh || fail 'sh rejected health-check.sh'
+sh -n pc_healt_check.sh || fail 'sh rejected pc_healt_check.sh'
 sh -n tests/test-posix.sh || fail 'sh rejected tests/test-posix.sh'
+sh -n tests/test-health-posix.sh || fail 'sh rejected tests/test-health-posix.sh'
 sh -n tests/test-source-policy.sh || fail 'sh rejected tests/test-source-policy.sh'
 [ -f swiss.ps1 ] || fail 'swiss.ps1 is missing'
+[ -f health-check.ps1 ] || fail 'health-check.ps1 is missing'
+[ -f scripts/smoke-health-windows.ps1 ] || fail 'Windows health smoke is missing'
 
 if command -v dash >/dev/null 2>&1; then
     dash -n swiss.sh || fail 'dash rejected swiss.sh'
@@ -40,14 +45,22 @@ sh tests/test-source-policy.sh || fail 'source-policy checks failed'
 
 printf '%s\n' '== POSIX behavior =='
 env TEST_SHELL=sh sh tests/test-posix.sh || fail 'tests failed under /bin/sh'
+env TEST_SHELL=sh sh tests/test-health-posix.sh ||
+    fail 'health-check tests failed under /bin/sh'
 if command -v dash >/dev/null 2>&1; then
     env TEST_SHELL=dash sh tests/test-posix.sh || fail 'tests failed under dash'
+    env TEST_SHELL=dash sh tests/test-health-posix.sh ||
+        fail 'health-check tests failed under dash'
 fi
 if command -v busybox >/dev/null 2>&1; then
     env TEST_SHELL=busybox-ash sh tests/test-posix.sh || fail 'tests failed under BusyBox ash'
+    env TEST_SHELL=busybox-ash sh tests/test-health-posix.sh ||
+        fail 'health-check tests failed under BusyBox ash'
 fi
 if command -v bash >/dev/null 2>&1; then
     env TEST_SHELL=bash-posix sh tests/test-posix.sh || fail 'tests failed under Bash POSIX mode'
+    env TEST_SHELL=bash-posix sh tests/test-health-posix.sh ||
+        fail 'health-check tests failed under Bash POSIX mode'
 fi
 
 printf '%s\n' '== Sanitized report smoke =='
@@ -86,6 +99,8 @@ fi
 if command -v pwsh >/dev/null 2>&1; then
     SWISS_FIXTURE_MODE=1 pwsh -NoLogo -NoProfile -File tests/test-windows.ps1 ||
         fail 'PowerShell collector tests failed'
+    pwsh -NoLogo -NoProfile -File tests/test-health-windows.ps1 ||
+        fail 'PowerShell health-check tests failed'
 else
     printf '%s\n' 'NOTE: PowerShell is unavailable; native tests are delegated to Windows CI.'
 fi

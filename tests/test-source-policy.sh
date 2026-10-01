@@ -52,6 +52,28 @@ if sed '/^[[:space:]]*#/d' "$repository_root/swiss.ps1" |
     fail 'swiss.ps1 contains a forbidden operation'
 fi
 
+[ -f "$repository_root/health-check.sh" ] || fail 'health-check.sh is missing'
+health_mutators='(^|[^[:alnum:]_.-])(sshpass|kill|pkill|killall|mount|umount|systemctl|service|reboot|shutdown|poweroff|chmod|chown|mkfs|dd)([^[:alnum:]_.-]|$)'
+if sed '/^[[:space:]]*#/d' "$repository_root/health-check.sh" |
+    grep -En "$health_mutators"; then
+    fail 'health-check.sh contains a host-mutating command'
+fi
+if grep -Eqi 'StrictHostKeyChecking[=[:space:]]*no|silabs\.com|google\.com' \
+    "$repository_root/health-check.sh"; then
+    fail 'health-check.sh weakens SSH verification or hard-codes a probe host'
+fi
+grep -q 'BatchMode=yes' "$repository_root/health-check.sh" ||
+    fail 'health-check.sh remote mode is not batch-only'
+grep -q 'StrictHostKeyChecking=yes' "$repository_root/health-check.sh" ||
+    fail 'health-check.sh remote mode does not require known host keys'
+
+[ -f "$repository_root/health-check.ps1" ] || fail 'health-check.ps1 is missing'
+health_windows_forbidden='Start-Process[[:space:]].*-Verb[[:space:]]+RunAs|Install-WindowsUpdate|Set-ItemProperty|New-ItemProperty|Remove-ItemProperty|Invoke-WebRequest|Invoke-RestMethod|Install-Package|Install-Module|Restart-Computer|Stop-Computer|Start-Service|Stop-Service|Format-Volume|Set-NetAdapter|StrictHostKeyChecking=no'
+if sed '/^[[:space:]]*#/d' "$repository_root/health-check.ps1" |
+    grep -Eini "$health_windows_forbidden"; then
+    fail 'health-check.ps1 contains a mutating or weakened-SSH operation'
+fi
+
 for workflow_path in \
     "$repository_root/.github/workflows/"*.yml \
     "$repository_root/.github/workflows/"*.yaml; do

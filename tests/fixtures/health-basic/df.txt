@@ -1,0 +1,5 @@
+Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/root 1000 900 100 90% /
+/dev/data 1000 200 800 20% /data
+devfs 204 204 0 100% /dev
+map auto_home 0 0 0 100% /home
