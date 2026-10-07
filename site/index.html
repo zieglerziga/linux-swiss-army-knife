@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Observed specifications for GitHub-hosted runners.">
+    <title>GitHub-hosted runner specifications</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <p class="eyebrow">Linux Swiss Army Knife</p>
+        <h1>GitHub-hosted runner specifications</h1>
+        <p class="lede">A daily, read-only snapshot of the explicit GitHub-hosted runner labels this project validates.</p>
+        <p id="updated-at" class="updated" aria-live="polite">Loading the latest collected data…</p>
+      </header>
+
+      <section aria-labelledby="summary-title">
+        <h2 id="summary-title">Snapshot summary</h2>
+        <div id="summary" class="summary" aria-live="polite"></div>
+      </section>
+
+      <section aria-labelledby="records-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="records-title">Observed runners</h2>
+            <p>Image versions and system details are observed values, not promises of future image contents.</p>
+          </div>
+          <label for="filter">Filter labels <input id="filter" type="search" autocomplete="off" placeholder="e.g. arm or macos"></label>
+        </div>
+        <p id="status" class="status" role="status"></p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Runner label</th>
+                <th scope="col">Platform</th>
+                <th scope="col">Image</th>
+                <th scope="col">System</th>
+                <th scope="col">Kernel</th>
+                <th scope="col">Optional tool</th>
+              </tr>
+            </thead>
+            <tbody id="records"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer>
+        <p>Data is collected on GitHub-hosted runners using local, read-only OS queries. The source workflow and runner inventory are in this repository.</p>
+      </footer>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
