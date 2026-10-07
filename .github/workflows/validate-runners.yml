@@ -179,3 +179,25 @@ jobs:
           ACTUAL_RUNNER_OS: ${{ runner.os }}
           ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
         run: .\scripts\validate-windows.ps1
+
+  static-report:
+    name: Static runner report assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and validate fixture report
+        shell: bash
+        run: sh scripts/test-runner-site.sh
+
+      - name: Parse browser script
+        shell: bash
+        run: node --check site/app.js
+
+      - name: Parse workflow YAML
+        shell: bash
+        run: ruby -ryaml -e 'YAML.load_file(".github/workflows/publish-runner-specifications.yml")'
