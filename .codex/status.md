@@ -151,3 +151,57 @@ review passes.
 Create a scoped commit such as
 `ci(validation): cover all hosted runner versions`, push it when authorized,
 and wait for all 18 jobs on that exact commit before claiming CI success.
+
+## 2026-10-07: daily hosted-runner specification report
+
+### Changed
+
+- Added dependency-free, read-only collectors for POSIX and Windows hosted
+  runners. They emit compact JSON containing public runner/image/system facts
+  only; hostnames, network information, user names, and tracking IDs are not
+  collected.
+- Added a fixture-driven static report with summary cards, a label filter, and
+  a responsive observed-values table. The deployable dataset is assembled only
+  from the current workflow's collector artifacts.
+- Added `publish-runner-specifications.yml`, which collects the same 18
+  explicit labels as the validation inventory daily at 03:17 UTC, aggregates
+  their records, and deploys the static artifact through GitHub Pages.
+- Added fixture/build/JavaScript checks to the existing runner validation
+  workflow and documented local testing plus the Pages setup prerequisite.
+
+### Why
+
+The validated runner matrix establishes that this project works on materially
+different hosted images. A point-in-time visualization makes the actual image
+and operating-system specifications visible without granting the collector
+network, package-management, or mutating capabilities.
+
+### Verification
+
+- `sh scripts/test-runner-site.sh`: passed.
+- `sh scripts/validate-posix.sh`: passed with `/bin/sh`, `dash`, and Bash POSIX
+  mode for every tracked shell script.
+- `node --check site/app.js`: passed.
+- PowerShell AST parsing of `scripts/collect-runner-windows.ps1`: passed.
+- Ruby YAML parsing for both workflows: passed.
+- Workflow assertions for the daily schedule, exact 18-label inventory match,
+  full-SHA action pins, and required Pages deployment linkage/permissions:
+  passed.
+- `git diff --check`: passed.
+
+`actionlint` is not installed locally. No hosted run has occurred because the
+requested changes have not been pushed.
+
+### Branch and commits
+
+- `4e54cd0 feat(runners): collect hosted runner specifications`
+- `82f4250 feat(runners): add static specification report`
+- `3668188 ci(runners): publish daily specification report`
+
+### Known limitations and safe next step
+
+The first Pages deployment requires a repository administrator to select
+**GitHub Actions** as the Pages source. After an authorized push to `main` (or
+a manual dispatch), confirm all 18 collection jobs, the build artifact, and the
+`github-pages` deployment environment on that exact commit. The report is an
+observation of the current images, not a forward compatibility guarantee.
