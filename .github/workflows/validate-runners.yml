@@ -64,6 +64,26 @@ jobs:
           ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
         run: sh scripts/validate-runner-posix.sh
 
+      - name: Verify POSIX runner specification schema-version type
+        if: matrix.runner == 'ubuntu-24.04'
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          report_path="${RUNNER_TEMP}/runner-specification.json"
+          sh scripts/collect-runner-posix.sh >"$report_path"
+          python3 - "$report_path" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as report_file:
+              report = json.load(report_file)
+          if type(report.get("schema_version")) is not int or report["schema_version"] != 1:
+              raise SystemExit("schema_version must be the JSON number 1, not a string")
+          PY
+
       - name: Parse tracked shell scripts without executing them
         shell: bash
         run: sh scripts/validate-posix.sh
@@ -205,6 +225,45 @@ jobs:
           ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
         run: .\scripts\validate-windows.ps1
 
-      - name: Test collector with PowerShell 7
-        shell: pwsh
-        run: .\tests\test-windows.ps1
+      - name: Smoke-test runner specification artifact encoding
+        shell: powershell
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          .\scripts\collect-runner-windows.ps1 -OutputPath runner-spec.json
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'runner-spec.json'))
+          if ($bytes.Length -eq 0) { throw 'runner specification artifact is empty' }
+          if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xff -and $bytes[1] -eq 0xfe) {
+            throw 'runner specification artifact is UTF-16LE'
+          }
+          if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xef -and $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf) {
+            throw 'runner specification artifact has a UTF-8 BOM'
+          }
+          $record = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
+          if ($record.schema_version -is [string] -or [int64]$record.schema_version -ne 1) {
+            throw 'runner specification schema_version must be the JSON number 1'
+          }
+
+  static-report:
+    name: Static runner report assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and validate fixture report
+        shell: bash
+        run: sh scripts/test-runner-site.sh
+
+      - name: Parse browser script
+        shell: bash
+        run: node --check site/app.js
+
+      - name: Parse workflow YAML
+        shell: bash
+        run: ruby -ryaml -e 'YAML.load_file(".github/workflows/publish-runner-specifications.yml")'

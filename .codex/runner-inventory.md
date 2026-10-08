@@ -39,5 +39,6 @@ Primary sources:
 - [`actions/runner-images` available images](https://github.com/actions/runner-images#available-images)
 
 The inventory is time-sensitive. When GitHub adds or retires a standard image,
-update this document and the workflow matrix together, and repeat the dedicated
-runner review for the changed labels.
+update this document and both workflow matrices (`validate-runners.yml` and
+`publish-runner-specifications.yml`) together, and repeat the dedicated runner
+review for the changed labels.

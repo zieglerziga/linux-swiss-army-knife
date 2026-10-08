@@ -1,0 +1,1 @@
+{"schema_version":1,"collected_at":"2026-10-07T00:00:00Z","runner":{"label":"macos-15","os":"macOS","architecture":"ARM64"},"image":{"os":"macos15","version":"20261001.1"},"system":{"name":"macOS","version":"15.7","build":"24G222","kernel_name":"Darwin","kernel_release":"24.6.0","machine_architecture":"arm64"},"tools":{"xcode_version":"Xcode 16.4"}}

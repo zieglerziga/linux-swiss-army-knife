@@ -7,78 +7,42 @@ systems, macOS, and Windows. It reports operating-system, hardware, filesystem,
 local-network, identity, and privilege facts without installing anything,
 requesting elevation, changing configuration, or contacting the internet.
 
-## Run it
+The current validation workflow performs parse-only checks on every versioned
+standard GitHub-hosted runner available to public repositories. Existing
+interactive management scripts are never executed by CI.
 
-Linux, BusyBox, and macOS use the POSIX shell entry point:
+## GitHub-hosted runner report
 
-```sh
-sh swiss.sh
-sh swiss.sh --json
-sh swiss.sh --plain --debug
-sh swiss.sh --full
-```
+`publish-runner-specifications.yml` collects a fresh, read-only snapshot from
+the same 18 explicit GitHub-hosted runner labels described in
+`.codex/runner-inventory.md`. It runs every day at 03:17 UTC (deliberately not
+at minute zero), on demand, and when the report implementation changes on
+`main`.
 
-Windows uses Windows PowerShell 5.1 or modern PowerShell:
+The POSIX and Windows collectors use only local OS metadata and built-in
+commands. They report the requested label, Actions OS/architecture context,
+image OS/version, OS and kernel details, machine architecture, and the macOS
+Xcode version when available. They intentionally do not collect hostnames,
+network addresses, user names, or runner tracking identifiers.
 
-```powershell
-.\swiss.ps1
-.\swiss.ps1 --json
-.\swiss.ps1 --plain --debug
-.\swiss.ps1 --full
-```
+Each collection job publishes one short-lived record. A separate build job
+combines those records into a static, filterable report and deploys it through
+the official GitHub Pages artifact workflow. Before the first deployment, a
+repository administrator must select **GitHub Actions** as the Pages source in
+the repository's Pages settings and restrict the `github-pages` environment to
+the default branch. The workflow also prevents non-default-branch manual runs
+from deploying.
 
-No installation or administrator/root access is required. Copy the appropriate
-single script to the target computer and run it as the current user.
+GitHub may automatically disable scheduled workflows in a public repository
+after 60 days without repository activity. If daily collection stops for that
+reason, re-enable this workflow from the repository's Actions page.
 
-## Output
-
-The default output is a compact human report. `--plain` produces stable
-tab-separated facts, `--json` emits schema version 1, and `--debug` adds each
-probe's source. Both platform entry points emit the same 42 fields and the same
-statuses. See [the schema guide](docs/report-schema-v1.md) and the machine-
-readable [JSON Schema](schema/swiss-report-v1.schema.json).
-
-Unavailable information is represented honestly as `unknown`, `unsupported`,
-`missing`, `denied`, or `error`; one failed probe does not abort the report.
-
-## Read-only and privacy contract
-
-The collectors do not invoke elevation tools, package managers, active network
-tests, Wi-Fi scans, mounts, service controls, or configuration commands. Local
-filesystem capacity collection excludes network filesystems. Potentially
-slower macOS firmware/storage and Windows physical-disk enumeration is
-available only with `--full`.
-
-Reports intentionally contain potentially identifying local information:
-hostname, username, hardware model, storage model, interface names, MAC
-addresses, assigned local IP addresses, gateways, and configured DNS servers.
-Review a report before sharing it. Wi-Fi credentials, Wi-Fi SSIDs, public IP
-addresses, storage serial numbers, and external-connectivity tests are never
-collected.
-
-## Platform behavior
-
-- Linux prefers `/proc`, `/sys`, `/etc`, and device-tree data, with safe command
-  fallbacks. The baseline remains useful without `ip`, `ifconfig`, `lscpu`,
-  `free`, `lsblk`, systemd, or a package manager.
-- BusyBox `ash`, Dash, and Bash POSIX mode run the same `swiss.sh` file.
-- macOS uses built-in `sw_vers`, `sysctl`, `ifconfig`, `route`, `scutil`, and
-  `pmset` queries.
-- Windows uses built-in .NET, CIM, and networking cmdlets and remains compatible
-  with Windows PowerShell 5.1.
-- BSD-like systems receive a best-effort portable baseline. GRUB and rescue
-  media are explicitly outside the current running-OS collector.
-
-## Development verification
-
-Run the sanitized fixture suite locally with:
+To exercise the static report locally with non-identifying fixtures:
 
 ```sh
-sh scripts/verify.sh
+sh scripts/test-runner-site.sh
 ```
 
-The suite performs POSIX parsing, ShellCheck when available, source-policy
-checks, Dash/BusyBox/Bash behavior tests, JSON Schema validation, and PowerShell
-tests when `pwsh` is installed. CI adds narrow live smokes on every supported
-GitHub-hosted Linux, macOS, and Windows runner without executing the repository's
-older interactive `docker_manager.sh`.
+Observed image contents are a point-in-time report, not a compatibility
+guarantee. The authoritative label lifecycle and validation policy remain in
+`.codex/runner-inventory.md`.

@@ -152,195 +152,78 @@ Create a scoped commit such as
 `ci(validation): cover all hosted runner versions`, push it when authorized,
 and wait for all 18 jobs on that exact commit before claiming CI success.
 
-## 2026-09-29: cross-platform read-only collectors
+## 2026-10-07: daily hosted-runner specification report
 
 ### Changed
 
-- Added `swiss.sh`, a single-file POSIX collector with Linux, BusyBox, macOS,
-  BSD-baseline, human, plain, debug, full, and JSON paths.
-- Added `swiss.ps1`, a matching 42-field Windows collector compatible with
-  Windows PowerShell 5.1 syntax and modern PowerShell.
-- Added the exact version-one field manifest and JSON Schema, sanitized Linux
-  fixtures, a small standard-library schema validator, source-policy checks,
-  and behavior tests for POSIX shells and PowerShell.
-- Changed filesystem capacity collection to local filesystems only. macOS
-  storage/firmware and Windows physical-disk enumeration require `--full`.
-- Added platform CI smokes and collector tests to the existing 18-runner
-  matrix, plus user documentation covering execution and report privacy.
+- Added dependency-free, read-only collectors for POSIX and Windows hosted
+  runners. They emit compact JSON containing public runner/image/system facts
+  only; hostnames, network information, user names, and tracking IDs are not
+  collected.
+- Added a fixture-driven static report with summary cards, a runner filter, and
+  a responsive observed-values table. The deployable dataset is assembled only
+  from the current workflow's collector artifacts.
+- Added `publish-runner-specifications.yml`, which collects the same 18
+  explicit labels as the validation inventory daily at 03:17 UTC, aggregates
+  their records, and deploys the static artifact through GitHub Pages.
+- Added fixture/build/JavaScript checks to the existing runner validation
+  workflow and documented local testing plus the Pages setup prerequisite.
 
 ### Why
 
-The repository's first feature target is one familiar, dependency-free,
-read-only report model across Linux/macOS and Windows. The implementation must
-remain useful on this Omarchy Steam Deck and on reduced BusyBox systems while
-degrading per fact when a command or local interface is unavailable.
-
-### Reviews and resolutions
-
-Two independent initial read-only reviews produced substantive findings:
-
-- The systems/security review found that unrestricted `df -Pk` could contact
-  mounted network filesystems, the source-policy check was bypassable, CI did
-  not run behavior tests, fixtures leaked live host facts, IPv6/fallback route
-  handling was incomplete, inventories lacked delimiter escaping, and the
-  schema did not enforce canonical keys.
-- The test-architect review additionally found non-canonical macOS/unknown
-  field order, missing Windows enforcement, weak plain/debug parity checks,
-  and missing hostile-value, `--full`, and cross-adapter coverage.
-
-Resolved by using local-only filesystem enumeration, moving potentially
-expensive storage queries behind `--full`, hermetically disabling command
-probes in fixtures, adding IPv6 and failed-command fallbacks, percent-encoding
-inventory delimiters, validating exactly 42 ordered keys, comparing all output
-modes, requiring both entry points, and running shared/native tests in CI.
-
-Follow-up review attempts and the dedicated portability reviewer could not
-complete because the reviewer account reached its usage limit. Therefore this
-entry records the initial review findings and verified fixes but does not claim
-independent follow-up approval. The limitation is explicit rather than treating
-the failed reviewer turns as successful reviews.
+The validated runner matrix establishes that this project works on materially
+different hosted images. A point-in-time visualization makes the actual image
+and operating-system specifications visible without granting the collector
+network, package-management, or mutating capabilities.
 
 ### Verification
 
-- Installed Dash, BusyBox, ShellCheck, and PowerShell 7.6.6 through Omarchy's
-  package workflow with GUI authentication; the account has full passworded
-  sudo rights through `wheel`.
-- `scripts/verify.sh`: passed under `/bin/sh`, Dash, BusyBox `ash`, Bash POSIX
-  mode, ShellCheck, PowerShell 7.6.6, source-policy tests, schema validation,
-  negative schema tests, and sanitized fixture tests.
-- `SWISS_EXPECTED_PLATFORM=linux sh scripts/smoke-posix.sh`: passed on the
-  Omarchy Steam Deck.
-- A Bubblewrap smoke with a read-only root and detached network namespace
-  produced valid 42-field Linux JSON.
-- Ruby JSON/YAML parsing, the 18-row matrix assertion, PowerShell AST parsing,
-  `git diff --check`, and immutable-checkout assertions passed locally.
+- `sh scripts/test-runner-site.sh`: passed.
+- `sh scripts/validate-posix.sh`: passed with `/bin/sh`, `dash`, and Bash POSIX
+  mode for every tracked shell script.
+- `node --check site/app.js`: passed.
+- PowerShell AST parsing of `scripts/collect-runner-windows.ps1`: passed.
+- Ruby YAML parsing for both workflows: passed.
+- Workflow assertions for the daily schedule, exact 18-label inventory match,
+  full-SHA action pins, and required Pages deployment linkage/permissions:
+  passed.
+- `git diff --check`: passed.
 
-No machine-identifying report values were added to the repository or this log.
+`actionlint` is not installed locally. No hosted run has occurred because the
+requested changes have not been pushed.
 
-### CI runs
+### Independent reviews
 
-- Bootstrap commit `3d2fa30530399024a914b3b313a421ffa4864fe4` ran as
-  [GitHub Actions run 36631092215](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36631092215).
-  Linux and macOS rows passed, but all Windows rows failed because Windows
-  PowerShell returned multiple `bash.exe` applications and the validator
-  coerced them into one invalid path. Commit `b4d056e` selects the first exact
-  application.
-- Feature head `aa9ad727ff8dc6fe3fd36e383f37f5943f6884c6` ran as
-  [GitHub Actions run 36637008207](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36637008207).
-  All 18 Linux, macOS, and Windows jobs passed, including both Windows
-  PowerShell 5.1 and PowerShell 7 collector tests.
+- Junior readability/documentation review initially found a schema-version type
+  that was not explicitly standardized or tested, incomplete two-workflow
+  inventory guidance, and a filter label narrower than its behavior. All three
+  were fixed.
+- Senior correctness/security review initially found UTF-16LE output from
+  Windows PowerShell 5.1 redirection and an unguarded non-default-branch manual
+  deployment path. Both blockers were fixed with explicit UTF-8-no-BOM output,
+  live encoding checks, and a default-branch deploy condition.
+- Senior follow-up found that only the Windows collector had live schema-type
+  coverage. An Ubuntu 24.04 collector smoke test was added.
+- Final junior and senior Luna reviews reported no implementation findings.
+  The subsequent documentation review found and corrected wording issues in
+  this status entry.
 
-### Branch and commits
+### Branch and implementation series
 
-- Branch: `codex/read-only-inspector-v1`
-- `981055a` — `feat(inspector): add cross-platform read-only collectors`
-- `86729ab` — `test(inspector): enforce schema and safety contract`
-- `52c6e11` — `ci(validation): execute collector quality gates`
-- `b4d056e` — `fix(ci): select one Git Bash executable`
-- `aa9ad72` — `docs(inspector): document usage and review evidence`
-- `8b2365c` — `fix(inspector): address native and safety review`
+- Branch: `codex/gh-runner-pages`
+- `79a0c87 feat(runners): collect hosted runner specifications`
+- `645e99a feat(runners): add static specification report`
+- `fd1687f ci(runners): publish daily specification report`
+- `e37bf49 docs(runners): record specification report rollout`
+- `f2555d6 fix(runners): emit portable specification records`
+- `71a4985 fix(pages): restrict deployment and clarify operations`
+- `72c6760 test(runners): cover POSIX specification schema`
 
-### Known limitations
+### Known limitations and safe next step
 
-- The native review-remediation commit `8b2365c` awaits its hosted matrix run.
-- BSD support is a best-effort portable baseline rather than release-grade
-  platform coverage.
-
-### Safe next step
-
-Push the review-remediation commit, wait for every job on the exact head, and
-fix any new native-platform findings before merge.
-
-## 2026-09-30: follow-up native and safety review remediation
-
-### Changed
-
-- Corrected macOS uptime parsing so `kern.boottime` cannot confuse `usec` with
-  `sec`, made ambiguous macOS `en*` interface types `unknown`, and added an
-  IPv6 default-route fallback.
-- Filtered Linux IPv6 reject-route sentinels, distinguished failed probes from
-  absent data, and added BusyBox-only filesystem fallback coverage with a
-  positive local-filesystem allowlist.
-- Corrected Windows machine-wide logical CPU count and made default-route
-  probing cover IPv4, IPv6, and CIM fallback with explicit success/failure
-  states.
-- Replaced safety claims based only on denylist matching with a tokenized POSIX
-  command allowlist and PowerShell AST command/API allowlist. Fixed the
-  unmatched workflow-glob bug that had disabled workflow policy scanning.
-- Strengthened native smoke assertions, Windows plain/debug parity checks,
-  macOS fixture semantics, and documented inventory percent encoding.
-
-### Review resolutions
-
-- Portability review findings for macOS uptime, ambiguous interface typing,
-  IPv6-only routing, and BusyBox external-tool coverage were fixed.
-- Security review findings for Linux IPv6 routing, Windows route fallback,
-  Windows multi-socket CPU count, structural allowlisting, and failure status
-  semantics were fixed.
-- Test review findings for workflow scanning, structural source policy, native
-  semantic assertions, output parity, and inventory wire encoding were fixed.
-- Two reported security findings were verified as stale: filesystem fallback
-  already used a positive local-filesystem allowlist, and Windows physical
-  disk enumeration was already gated by `--full`.
-
-### Verification
-
-- `sh scripts/verify.sh`: passed under `/bin/sh`, Dash, BusyBox `ash`, and Bash
-  POSIX mode, including ShellCheck, structural safety audits, JSON Schema
-  validation, route/fallback fixtures, and PowerShell 7 tests.
-- `SWISS_EXPECTED_PLATFORM=linux sh scripts/smoke-posix.sh`: passed on the
-  Omarchy Steam Deck with the strengthened native fact assertions.
-- Remediation head `c5fdc31cfaf7bbd398c8dd6eacda60cc5a08c25a` ran as
-  [GitHub Actions run 36638901709](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36638901709).
-  Linux passed. macOS exposed a BSD `awk` numeric-comparison portability issue
-  in the IPv6 reject sentinel fixture; Windows exposed expected free-space
-  changes between independent JSON/plain/debug collections. Commit `eda95e7`
-  uses a textual sentinel check and compares stable filesystem metadata/source
-  while retaining exact parity checks for stable facts.
-- Follow-up head `114d6cc8547b7e3092631382de2764346fc029ff` ran as
-  [GitHub Actions run 36639243581](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36639243581).
-  All Linux and Windows jobs passed; macOS still exposed numeric hexadecimal
-  flag parsing in its older `awk`. Commit `f26d885` removes numeric conversion
-  entirely: fixed-width metrics are compared as forced strings and the reject
-  bit is tested from its hexadecimal nibble. The fixture passes locally with
-  current One True AWK (`nawk`) as well as GNU and BusyBox awk.
-- Portable-flag head `9e67e0f398b9ae244a5d69215d2f10118ffbccfa`
-  ran as [GitHub Actions run 36639978022](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36639978022).
-  Linux and Windows passed; all macOS jobs still returned an empty route fact.
-- Diagnostic head `33000864c10957516b2572e053ab2e91219af004`
-  ran as [GitHub Actions run 36640254254](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36640254254)
-  and confirmed `exists`, interface, and gateway were all empty, isolating the
-  issue to candidate parsing rather than IPv6 presentation.
-- Commit `ec82d4e` removes `awk` from `/proc/net/ipv6_route` parsing entirely.
-  Filtering, reject-bit matching, hexadecimal metric conversion, and best-route
-  selection now use POSIX shell operations; only address colon insertion uses
-  portable `sed`.
-- Shell-parser head `11ff904da573092226cdb9ceecb87134501e038d` ran as
-  [GitHub Actions run 36640589143](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36640589143),
-  and fixture-copy head `f78700a2722142b327d9b9497996e8325d06f42f`
-  ran as [GitHub Actions run 36640790485](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36640790485).
-  The enhanced failure message reported `status=unsupported` with the fixture
-  file readable. This proved macOS Bash 3.2 retained `SWISS_TEST_PLATFORM` from
-  the preceding function-scoped adapter assignment; the Linux route collector
-  had not run. Commit `50d7e27` pins the Linux adapter explicitly for both
-  Linux-only fixtures.
-- Exact implementation/test head
-  `796c63d2f87d62f383d44ca5da2fe6de8df34905` ran as
-  [GitHub Actions run 36641003196](https://github.com/zieglerziga/linux-swiss-army-knife/actions/runs/36641003196).
-  All 18 Linux, macOS, and Windows jobs passed, including live native smokes,
-  both Windows PowerShell editions, and all six macOS fixture/native rows.
-
-### Branch and commit
-
-- Branch: `codex/read-only-inspector-v1`
-- Implementation remediation: `8b2365c`
-- Native CI follow-up: `eda95e7`
-- Portable route-flag follow-up: `f26d885`
-- Portable shell route parser: `ec82d4e`
-- Linux fixture adapter pin: `50d7e27`
-
-### Safe next step
-
-Commit this status update, push the branch, and watch the full hosted matrix on
-the resulting exact head until all jobs pass or a concrete native failure is
-fixed.
+The first Pages deployment requires a repository administrator to select
+**GitHub Actions** as the Pages source and restrict the `github-pages`
+environment to the default branch. After an authorized push to `main` (or a
+manual dispatch of `main`), confirm all 18 collection jobs, the build artifact,
+and the deployment on that exact commit. The report is an observation of the
+current images, not a forward compatibility guarantee.
