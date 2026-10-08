@@ -160,7 +160,7 @@ and wait for all 18 jobs on that exact commit before claiming CI success.
   runners. They emit compact JSON containing public runner/image/system facts
   only; hostnames, network information, user names, and tracking IDs are not
   collected.
-- Added a fixture-driven static report with summary cards, a label filter, and
+- Added a fixture-driven static report with summary cards, a runner filter, and
   a responsive observed-values table. The deployable dataset is assembled only
   from the current workflow's collector artifacts.
 - Added `publish-runner-specifications.yml`, which collects the same 18
@@ -194,18 +194,21 @@ requested changes have not been pushed.
 
 ### Independent reviews
 
-- Junior readability/documentation review initially found inconsistent runner
-  schema-version types, incomplete two-workflow inventory guidance, and a
-  filter label narrower than its behavior. All three were fixed.
+- Junior readability/documentation review initially found a schema-version type
+  that was not explicitly standardized or tested, incomplete two-workflow
+  inventory guidance, and a filter label narrower than its behavior. All three
+  were fixed.
 - Senior correctness/security review initially found UTF-16LE output from
   Windows PowerShell 5.1 redirection and an unguarded non-default-branch manual
   deployment path. Both blockers were fixed with explicit UTF-8-no-BOM output,
   live encoding checks, and a default-branch deploy condition.
 - Senior follow-up found that only the Windows collector had live schema-type
   coverage. An Ubuntu 24.04 collector smoke test was added.
-- Final junior and senior Luna reviews reported no findings.
+- Final junior and senior Luna reviews reported no implementation findings.
+  The subsequent documentation review found and corrected wording issues in
+  this status entry.
 
-### Branch and commits
+### Branch and implementation series
 
 - Branch: `codex/gh-runner-pages`
 - `79a0c87 feat(runners): collect hosted runner specifications`
