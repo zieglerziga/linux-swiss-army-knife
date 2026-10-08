@@ -16,7 +16,7 @@ case "$script_path" in
     *) script_directory=. ;;
 esac
 
-repository_root=$(CDPATH= cd "$script_directory/.." 2>/dev/null && pwd) ||
+repository_root=$(CDPATH='' cd "$script_directory/.." 2>/dev/null && pwd) ||
     fail 'cannot locate repository root'
 fixture_directory=$repository_root/tests/runner-data
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/runner-site.XXXXXX") ||
