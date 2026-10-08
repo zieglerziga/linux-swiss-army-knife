@@ -64,6 +64,26 @@ jobs:
           ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
         run: sh scripts/validate-runner-posix.sh
 
+      - name: Verify POSIX runner specification schema-version type
+        if: matrix.runner == 'ubuntu-24.04'
+        shell: bash
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+          RUNNER_OS: ${{ runner.os }}
+          RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          report_path="${RUNNER_TEMP}/runner-specification.json"
+          sh scripts/collect-runner-posix.sh >"$report_path"
+          python3 - "$report_path" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as report_file:
+              report = json.load(report_file)
+          if type(report.get("schema_version")) is not int or report["schema_version"] != 1:
+              raise SystemExit("schema_version must be the JSON number 1, not a string")
+          PY
+
       - name: Parse tracked shell scripts without executing them
         shell: bash
         run: sh scripts/validate-posix.sh
