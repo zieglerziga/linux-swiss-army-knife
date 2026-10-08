@@ -192,16 +192,35 @@ network, package-management, or mutating capabilities.
 `actionlint` is not installed locally. No hosted run has occurred because the
 requested changes have not been pushed.
 
+### Independent reviews
+
+- Junior readability/documentation review initially found inconsistent runner
+  schema-version types, incomplete two-workflow inventory guidance, and a
+  filter label narrower than its behavior. All three were fixed.
+- Senior correctness/security review initially found UTF-16LE output from
+  Windows PowerShell 5.1 redirection and an unguarded non-default-branch manual
+  deployment path. Both blockers were fixed with explicit UTF-8-no-BOM output,
+  live encoding checks, and a default-branch deploy condition.
+- Senior follow-up found that only the Windows collector had live schema-type
+  coverage. An Ubuntu 24.04 collector smoke test was added.
+- Final junior and senior Luna reviews reported no findings.
+
 ### Branch and commits
 
-- `4e54cd0 feat(runners): collect hosted runner specifications`
-- `82f4250 feat(runners): add static specification report`
-- `3668188 ci(runners): publish daily specification report`
+- Branch: `codex/gh-runner-pages`
+- `79a0c87 feat(runners): collect hosted runner specifications`
+- `645e99a feat(runners): add static specification report`
+- `fd1687f ci(runners): publish daily specification report`
+- `e37bf49 docs(runners): record specification report rollout`
+- `f2555d6 fix(runners): emit portable specification records`
+- `71a4985 fix(pages): restrict deployment and clarify operations`
+- `72c6760 test(runners): cover POSIX specification schema`
 
 ### Known limitations and safe next step
 
 The first Pages deployment requires a repository administrator to select
-**GitHub Actions** as the Pages source. After an authorized push to `main` (or
-a manual dispatch), confirm all 18 collection jobs, the build artifact, and the
-`github-pages` deployment environment on that exact commit. The report is an
-observation of the current images, not a forward compatibility guarantee.
+**GitHub Actions** as the Pages source and restrict the `github-pages`
+environment to the default branch. After an authorized push to `main` (or a
+manual dispatch of `main`), confirm all 18 collection jobs, the build artifact,
+and the deployment on that exact commit. The report is an observation of the
+current images, not a forward compatibility guarantee.
