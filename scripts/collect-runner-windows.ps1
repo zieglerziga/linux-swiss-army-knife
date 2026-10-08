@@ -1,6 +1,10 @@
 # Collect public, read-only specifications from a GitHub-hosted Windows runner.
 # The workflow supplies the selected label and Actions context.
 
+param(
+    [string]$OutputPath
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -25,7 +29,7 @@ $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem
 $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
 
 $record = [ordered]@{
-    schema_version = '1'
+    schema_version = 1
     collected_at = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     runner = [ordered]@{
         label = $runnerLabel
@@ -49,4 +53,15 @@ $record = [ordered]@{
     }
 }
 
-$record | ConvertTo-Json -Compress -Depth 4
+$json = $record | ConvertTo-Json -Compress -Depth 4
+
+if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    $json
+}
+else {
+    # Windows PowerShell 5.1 writes UTF-16LE when its output is redirected.
+    # Write the artifact explicitly so the POSIX site builder receives UTF-8.
+    $resolvedOutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($resolvedOutputPath, $json, $utf8WithoutBom)
+}

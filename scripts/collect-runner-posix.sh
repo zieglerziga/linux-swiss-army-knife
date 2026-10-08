@@ -89,7 +89,7 @@ collected_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) ||
     fail 'date failed'
 
 printf '{'
-json_field schema_version 1
+printf '"schema_version":1'
 printf ','
 json_field collected_at "$collected_at"
 printf ',"runner":{'

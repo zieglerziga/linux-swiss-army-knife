@@ -37,6 +37,7 @@ ruby -rjson -e '
   abort "unexpected schema version" unless data.fetch("schema_version") == "1"
   records = data.fetch("runners")
   abort "expected three fixture records" unless records.length == 3
+  abort "runner schema versions must be numeric" unless records.all? { |record| record.fetch("schema_version") == 1 }
   labels = records.map { |record| record.fetch("runner").fetch("label") }.sort
   abort "unexpected fixture labels" unless labels == ["macos-15", "ubuntu-24.04", "windows-2025"]
 ' "$temporary_directory/site/data/runners.json" || fail 'generated dataset is invalid'

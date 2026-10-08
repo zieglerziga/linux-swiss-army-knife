@@ -138,7 +138,7 @@ jobs:
           RUNNER_LABEL: ${{ matrix.runner }}
           RUNNER_OS: ${{ runner.os }}
           RUNNER_ARCH: ${{ runner.arch }}
-        run: .\scripts\collect-runner-windows.ps1 > runner-spec.json
+        run: .\scripts\collect-runner-windows.ps1 -OutputPath runner-spec.json
 
       - name: Upload runner record
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
