@@ -42,4 +42,10 @@ ruby -rjson -e '
   abort "unexpected fixture labels" unless labels == ["macos-15", "ubuntu-24.04", "windows-2025"]
 ' "$temporary_directory/site/data/runners.json" || fail 'generated dataset is invalid'
 
+workflow_path=$repository_root/.github/workflows/publish-runner-specifications.yml
+grep -F "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" \
+    "$workflow_path" >/dev/null || fail 'Pages deploy is not restricted to the default branch'
+grep -F 'Filter runners' "$repository_root/site/index.html" >/dev/null ||
+    fail 'runner filter label is missing'
+
 printf '%s\n' 'Static runner report tests passed.'

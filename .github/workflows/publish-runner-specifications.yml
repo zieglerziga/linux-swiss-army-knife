@@ -182,6 +182,7 @@ jobs:
   deploy:
     name: Deploy GitHub Pages report
     needs: build
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     permissions:
       contents: read
       pages: write

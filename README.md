@@ -28,7 +28,13 @@ Each collection job publishes one short-lived record. A separate build job
 combines those records into a static, filterable report and deploys it through
 the official GitHub Pages artifact workflow. Before the first deployment, a
 repository administrator must select **GitHub Actions** as the Pages source in
-the repository's Pages settings.
+the repository's Pages settings and restrict the `github-pages` environment to
+the default branch. The workflow also prevents non-default-branch manual runs
+from deploying.
+
+GitHub may automatically disable scheduled workflows in a public repository
+after 60 days without repository activity. If daily collection stops for that
+reason, re-enable this workflow from the repository's Actions page.
 
 To exercise the static report locally with non-identifying fixtures:
 
