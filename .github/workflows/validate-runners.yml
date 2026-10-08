@@ -88,6 +88,17 @@ jobs:
         shell: bash
         run: sh scripts/validate-posix.sh
 
+      - name: Run shared fixture verification
+        if: matrix.runner == 'ubuntu-24.04'
+        shell: bash
+        run: sh scripts/verify.sh
+
+      - name: Smoke-test the Linux collector
+        shell: bash
+        env:
+          SWISS_EXPECTED_PLATFORM: linux
+        run: sh scripts/smoke-posix.sh
+
   macos:
     name: macOS - ${{ matrix.runner }}
     strategy:
@@ -142,6 +153,16 @@ jobs:
         shell: bash
         run: sh scripts/validate-posix.sh
 
+      - name: Run POSIX fixture behavior tests
+        shell: bash
+        run: sh tests/test-posix.sh
+
+      - name: Smoke-test the macOS collector
+        shell: bash
+        env:
+          SWISS_EXPECTED_PLATFORM: macos
+        run: sh scripts/smoke-posix.sh
+
   windows:
     name: Windows - ${{ matrix.runner }}
     strategy:
@@ -187,6 +208,10 @@ jobs:
           ACTUAL_RUNNER_OS: ${{ runner.os }}
           ACTUAL_RUNNER_ARCH: ${{ runner.arch }}
         run: .\scripts\validate-windows.ps1
+
+      - name: Test collector with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\test-windows.ps1
 
       - name: Validate with PowerShell 7
         shell: pwsh

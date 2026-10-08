@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zieglerziga/linux-swiss-army-knife/schema/swiss-report-v1.schema.json",
+  "title": "Linux Swiss Army Knife report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "collector", "facts", "warnings"],
+  "$defs": {
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "value", "status", "source", "confidence"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_]*)+$"
+        },
+        "value": { "type": "string" },
+        "status": {
+          "enum": ["ok", "unknown", "unsupported", "missing", "denied", "error"]
+        },
+        "source": { "type": "string", "minLength": 1 },
+        "confidence": {
+          "enum": ["exact", "derived", "heuristic"]
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "collector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "mode", "platform", "timestamp"],
+      "properties": {
+        "name": { "const": "linux-swiss-army-knife" },
+        "version": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["normal", "full"] },
+        "platform": { "enum": ["linux", "macos", "bsd", "windows", "unknown"] },
+        "timestamp": { "type": "string", "minLength": 1 }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "minItems": 42,
+      "maxItems": 42,
+      "prefixItems": [
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "collector.name" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "collector.version" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "collector.schema_version" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "collector.timestamp" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "collector.mode" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "collector.platform_adapter" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "identity.hostname" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "identity.username" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "identity.uid" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "identity.primary_gid" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "identity.is_privileged" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "identity.elevation_tools" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.kernel.name" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.kernel.release" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.architecture.machine" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.architecture.userspace_bits" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.os.family" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.os.product" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.os.version" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.os.build" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.environment.type" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "system.uptime_seconds" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.manufacturer" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.model" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.firmware.vendor" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.firmware.version" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.firmware.date" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.cpu.model" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.cpu.logical_count" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.memory.total_bytes" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.battery.present" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.battery.state" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.battery.charge_percent" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.filesystems" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "hardware.storage" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.hostname" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.interfaces" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.addresses" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.default_route.exists" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.default_route.interface" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.default_route.gateway" } } },
+        { "$ref": "#/$defs/fact", "properties": { "key": { "const": "network.dns.resolvers" } } }
+      ],
+      "items": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -2,9 +2,10 @@
 
 [![Validate GitHub-hosted runners](https://github.com/zieglerziga/linux-swiss-army-knife/actions/workflows/validate-runners.yml/badge.svg)](https://github.com/zieglerziga/linux-swiss-army-knife/actions/workflows/validate-runners.yml)
 
-A portable computer-information and maintenance toolkit. The first development
-goal is dependency-free, read-only information collection across Linux,
-BusyBox, macOS, and Windows.
+A dependency-free, read-only system inspector for Linux, minimal BusyBox
+systems, macOS, and Windows. It reports operating-system, hardware, filesystem,
+local-network, identity, and privilege facts without installing anything,
+requesting elevation, changing configuration, or contacting the internet.
 
 The current validation workflow performs parse-only checks on every versioned
 standard GitHub-hosted runner available to public repositories. Existing

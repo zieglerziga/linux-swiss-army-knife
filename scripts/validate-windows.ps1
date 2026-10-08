@@ -146,7 +146,8 @@ try {
         Write-Host ('PowerShell parser accepted: {0}' -f $file)
     }
 
-    $bash = Get-Command -Name bash -CommandType Application -ErrorAction Stop
+    $bash = Get-Command -Name bash -CommandType Application -ErrorAction Stop |
+        Select-Object -First 1
     $shellFiles = @(& git ls-files --cached --others --exclude-standard -- '*.sh')
     if ($LASTEXITCODE -ne 0) {
         throw 'git failed while enumerating shell source'
